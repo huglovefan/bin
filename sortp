@@ -1,0 +1,28 @@
+#!/usr/bin/lua
+--
+-- sort lines but only compare the part that matches a match pattern
+-- -d to sort the lines with the matched portion removed
+--
+
+if arg[1] == '-d' then dflag=1 arg={select(2,table.unpack(arg))} end
+if #arg ~= 1 then
+	io.stderr:write('usage: sortp [-d] <pattern>\n')
+	os.exit(1)
+end
+local pat = arg[1]
+local lines = {}
+if dflag then
+	for line in io.lines() do
+		table.insert(lines, {line, line:gsub(pat, '', 1) or line})
+	end
+else
+	for line in io.lines() do
+		table.insert(lines, {line, line:match(pat) or line})
+	end
+end
+table.sort(lines, function (l1, l2)
+	return l1[2] < l2[2]
+end)
+for _, line in ipairs(lines) do
+	print(line[1])
+end

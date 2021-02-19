@@ -1,0 +1,37 @@
+#!/bin/mksh
+#
+# run a command and prompt to abort/retry/ignore if it fails
+#
+# good for running batch jobs that can fail like "cat urls | xargs ari wget"
+#
+
+if (( $# == 0 )); then
+	print -rn2 "usage: ari <command>"
+	return 1
+fi
+
+while true; do
+	command -- "$@"
+	typeset -i rv=$?
+	if (( rv == 0 )); then
+		exit 0
+	fi
+	{
+	print -ru2 ""
+	print -ru2 "Command '${*}' exited with status ${rv}"
+	while true; do
+		print -rnu2 $'\a'
+		print -rnu2 "[A]bort/[R]etry/[I]gnore? "
+		if ! IFS= read -r line; then
+			line='a'
+		fi
+		case $line in
+		[Aa]) kill "$PPID"; return "$rv";;
+		[Rr]) continue 2;;
+		[Ii]) return 0;;
+		esac
+	done
+	} 0<>/dev/tty 1>&0 2>&0
+	# failed to open tty
+	return 1
+done

@@ -1,0 +1,71 @@
+#!/bin/sh
+#
+# stop/resume the currently visible X window
+#
+
+wid=$(xdotool getactivewindow) || exit
+pid=$(xdotool getwindowpid "$wid") || exit
+name=$(xdotool getwindowname "$wid") || exit
+# recursive kill. tries to avoid some race conditions
+# (tries to catch new processes by looping until the list of child processes is the same)
+# doesn't catch existing children un-stopping each other though
+kill_r() {
+	local sig pid pids oldpids tries
+	sig=$1
+	pid=$2
+	pids=
+	oldpids=
+	tries=10
+	while [ $tries -gt 0 ]; do
+		pids=$(pstree -Tclnp "$pid" | grep -Po '\(\K[0-9]+(?=\))')
+		if [ -z "$pids" ]; then
+			>&2 echo "kill_r: no processes found for $pid"
+			return 1
+		fi
+		if [ -n "$oldpids" -a "$pids" = "$oldpids" ]; then
+			return 0
+		fi
+		kill -"$sig" $pids || return 1
+		oldpids=$pids
+		tries=$((tries-1))
+	done
+	if ! [ $tries -gt 0 ]; then
+		>&2 echo "kill_r: gave up trying to send $sig to $pid"
+		return 1
+	fi
+	return 0
+}
+if [ \
+     -n "$TERM" -a \
+     "$TERM" != linux -a \
+     -t 0 -a \
+     -t 1 -a \
+     -t 2 \
+]; then
+	>&2 echo "don't do this"
+	exit 1
+fi
+case $1:$# in
+stop:1)
+	kill_r STOP "$pid" || exit
+	case $name in
+	*" (stopped)")
+		;;
+	*)
+		xdotool set_window --name "$name (stopped)" "$wid"
+		;;
+	esac
+	;;
+cont:1)
+	case $name in
+	*" (stopped)")
+		xdotool set_window --name "${name% (stopped)}" "$wid"
+		;;
+	esac
+	kill_r CONT "$pid"
+	;;
+*)
+	>&2 echo "usage: xstopcont stop|cont"
+	exit 1
+	;;
+esac

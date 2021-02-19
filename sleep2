@@ -1,0 +1,88 @@
+#!/bin/mksh
+#
+# sleep(1) with a progress indicator
+#
+
+function parse_time {
+	typeset -u sec=${2:-0} tmp=${3:-0}
+	case $1 in
+	[0-9]*) parse_time "${1:1}" "$sec" "$((tmp*10+${1:0:1}))";;
+	h@([0-9]*|)) parse_time "${1:1}" "$((sec+tmp*60*60))" "0";;
+	m@([0-9]*|)) parse_time "${1:1}" "$((sec+tmp*60))" "0";;
+	s@([0-9]*|)) parse_time "${1:1}" "$((sec+tmp))" "0";;
+	'') REPLY=$((sec+tmp)); return 0;;
+	*) print -ru2 "invalid time"; return 1;;
+	esac
+}
+
+function unparse_time {
+	typeset -u sec=$1
+	typeset s=${2:-}
+	case 1 in
+	$((sec>=60*60))) unparse_time "$((sec%(60*60)))" "${s}$((sec/(60*60)))h";;
+	$((sec>=60))) unparse_time "$((sec%60))" "${s}$((sec/60))m";;
+	$((sec>=1))) unparse_time "0" "${s}$((sec))s";;
+	1) REPLY=$s;;
+	esac
+}
+
+if [[ $* == -1 ]]; then
+	typeset start_time=$(date +'%T')
+	typeset -u sec=1
+	while true; do
+		print -r -- "${|unparse_time "$((sec++))"} since ${start_time}"
+		sleep 1
+	done
+	return 0
+fi
+
+typeset s=$EPOCHREALTIME
+typeset -u sec=${s:0:10} msec=${s:11}
+
+typeset -u alignment=$msec
+typeset -u done=$(( sec + ${|parse_time "$1" || REPLY=0} ))
+
+stty=$(stty -g)
+stty -echo
+trap 'stty "$stty"' EXIT
+trap 'exit 1' HUP INT TERM
+
+typeset done_time=$(date -d "@${done}" +'%T')
+
+function realign {
+	typeset s=$EPOCHREALTIME
+	typeset -u sec=${s:0:10} msec=${s:11}
+	alignment=$msec
+	done_time=$(date -d "@${done}" +'%T')
+}
+
+# expectation:
+# when pressing up, it should print a bigger number
+# the number should go up (↑)
+
+# make realign work
+
+# print "until <completion time>" too, like "13s until 12:34:56"
+
+lp=
+while true; do
+	typeset s=$EPOCHREALTIME
+	typeset -u sec=${s:0:10} msec=${s:11}
+	if (( sec >= done )); then
+		break
+	fi
+	print -r "${|unparse_time "$(( done - sec ))"} until ${done_time}"
+	typeset timeout=0.$(( (alignment + (1000000-msec)) % 1000000 ))
+	if IFS= read -n 99 -r -t "$timeout" c 2>&-; then
+		# todo: reset alignment to fix the jank with the same time appearing twice?
+		case $c in
+		$'\E[A') (( done+=1 )); realign;;
+		$'\E[B') (( done-=1 )); realign;;
+		$'\E[C') (( done-=10 )); realign;;
+		$'\E[D') (( done+=10 )); realign;;
+		q) break;;
+		esac
+	fi
+done
+
+print -n $'\a'

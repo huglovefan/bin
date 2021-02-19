@@ -1,0 +1,51 @@
+#!/bin/mksh
+#
+# waits until some processes exit
+#
+# - only exits with 0 if we did some waiting for at least one process,
+#   this is so you can do commands like:
+#   % waitpid $(pidof slow_thing) && hibernate
+#   without accidentally hibernating if the process didn't exist
+#
+
+if (( $# == 0 )); then
+	cat <<- EOF >&2
+	${0##*/}: no pids provided
+	usage: ${0##*/} <pid> ...
+	EOF
+	exit 1
+fi
+
+# check that the pids are valid and at least one exists
+found=
+for pid; do
+	if [[ $pid != [1-9]*([0-9]) ]]; then
+		print -ru2 "${0##*/}: invalid pid '$pid'"
+		exit 1
+	fi
+	if [[ -z $found && -e /proc/$pid ]]; then
+		found=1
+	fi
+done
+if [[ -z $found ]]; then
+	if (( $# > 1 )); then
+		print -ru2 "${0##*/}: none of the processes exist"
+	else
+		print -ru2 "${0##*/}: the process doesn't exist"
+	fi
+	exit 1
+fi
+
+nicest -p $$ <&-
+
+while true; do
+	for pid; do
+		if [[ -e /proc/$pid ]]; then
+			sleep 1
+			continue 2
+		fi
+	done
+	break
+done
+
+exit 0

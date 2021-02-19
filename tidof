@@ -1,0 +1,23 @@
+#!/bin/sh
+#
+# like pidof but for thread names
+#
+
+if [ $# -ne 1 ]; then
+	>&2 echo "usage: ${0##*/} <name>"
+	exit 1
+fi
+
+rv=1
+
+for p in /proc/*/task/*/comm; do
+	{ IFS= read -r comm <"$p"; } 2>&- || continue
+	case $comm in
+	$1)
+		n=${p##*/task/}
+		echo "${n%/comm}" && rv=0
+		;;
+	esac
+done
+
+exit $rv

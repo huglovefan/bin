@@ -1,0 +1,42 @@
+#!/bin/mksh
+#
+# in an sshfs directory: ssh to the host and cd to the same directory
+#
+
+if [[ $(findmnt -fno fstype -T .) != ?(fuse.)sshfs ]]; then
+	print -ru2 "become: current directory is not on sshfs"
+	return 1
+fi
+
+source=$(findmnt -fno source -T .)
+sshfs_host=${source%%:*}
+sshfs_remote_root=${source#*:}
+sshfs_remote_root=${sshfs_remote_root:-.}
+# ^ path on the remote machine to the directory that's mounted (relative to home)
+
+local_mntpoint=$(findmnt -fno target -T .)
+local_remote_path=${PWD##"$local_mntpoint"}
+# ^ path to $PWD inside the mount directory, starting from the mount point
+
+remote_fullpath=${sshfs_remote_root}${sshfs_remote_root:+/}${local_remote_path##+(/)}
+# ^ full path on the remote machine to $PWD
+
+# path cosmetic surgery
+remote_fullpath=${remote_fullpath//+("/")/"/"}
+remote_fullpath=${remote_fullpath%%+("/")}
+remote_fullpath=${remote_fullpath:-/}
+
+function shellquote {
+	REPLY=\'${1//\'/\'\\\'\'}\'
+}
+
+cmd='exec "$SHELL" -l'
+if (( $# > 0 )); then
+	cmd+=" -c 'exec \"\$@\"' --"
+	for arg; do
+		cmd+=" ${|shellquote "$arg"}"
+	done
+fi
+
+exec ssh -e none -q -t "$sshfs_host" \
+    "cd -- ${|shellquote "$remote_fullpath"} && ${cmd}"

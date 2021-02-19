@@ -1,0 +1,336 @@
+#!/bin/mksh
+#
+# utilities for testing X modelines
+#
+set +o monitor
+
+# make us interactive
+if [[ -z $MODES_SH ]]; then
+	# export args (maybe there's a better way)
+	export _ARGC=$#
+	typeset -i i=0
+	while (( ++i <= _ARGC )); do
+		eval "export _ARG${i}=\${${i}}"
+	done
+
+	ENV=$0 MODES_SH=1 exec /proc/self/exe
+	exit
+else
+	typeset -i i=0
+	while (( ++i <= _ARGC )); do
+		eval "set -- \"\$@\" \"\${_ARG${i}}\""
+	done
+fi
+
+out_name=()
+out_res=()
+out_mode=()
+out_rate=()
+OUTPUT=
+
+PS1='${out_name[OUTPUT]}> '
+
+function help {
+	cat <<- EOF
+	modes.sh: Interactive tool for testing modelines
+	
+	Commands:
+	  outputs          List outputs
+	  output <id>      Set the output to configure
+	  help             Show this help text
+	  links [id]       Show some useful links (or open one)
+	  reset            Reset the current output to its initial mode
+	  dumpmodes        Print all modelines from xrandr
+	  Modeline ...     Test a modeline (same syntax as in xorg.conf)
+	  guessparams ...  Guess parameters for a pixel clock calculator modeline
+	
+	EOF
+}
+
+thelinks=(
+	"pixel clock calculator (makes modelines)"
+	  "https://www.monitortests.com/pixelclock.php"
+	"modeline explainer (nice illustration of the sync parameters)"
+	  "https://arachnoid.com/modelines/"
+	"another explainer (the xvidtune tool didn't work for me)"
+	  "http://howto-pages.org/ModeLines/"
+	"madvr custom res tutorial (tangentially related)"
+	  "http://madvr.com/crt/CustomResTutorial.html"
+)
+
+function links {
+	if (( $# == 0 )); then
+		typeset -i i=0
+		while (( i < ${#thelinks[@]}/2 )); do
+			print "[$i]\t${thelinks[i*2]}"
+			print "\t${thelinks[i*2+1]}"
+			(( i += 1 ))
+		done
+	elif (( $# == 1 )); then
+		typeset -i n=$1
+		if (( n >= 0 && n < ${#thelinks[@]}/2 )); then
+			command "${BROWSER:-xdg-open}" "${thelinks[n*2]}"
+			if (( $? != 0 )); then
+				print -ru2 "$0: failed to open url: ${thelinks[n*2]}"
+			fi
+		else
+			print -ru2 "$0: invalid id"
+			return 1
+		fi
+	else
+		print -ru2 "usage: $0 [id]"
+		return 1
+	fi
+}
+
+function search {
+	if (( $# != 2 )); then
+		print -ru2 "usage: $0 <string> <pattern>"
+		return 1
+	fi
+	typeset reply=
+	eval ": \"\${1@/${2}/\${|[[ -z \$reply ]]&&reply=\$KSH_MATCH}}\""
+	REPLY=$reply
+	[[ -n $REPLY ]]
+}
+
+function parse_outputs {
+	out_name=()
+	out_res=()
+	out_mode=()
+	out_rate=()
+	OUTPUT=
+
+	{ exec xrandr 2>&3 |& } 3>&2 2>&-
+	while read -Apr line; do
+		if [[ ${line[1]} == connected ]]; then
+			# this line has the output name and the current resolution
+			out_name+=("${line[0]}")
+			out_res+=("${|search "${line[*]}" '+([0-9])x+([0-9])'}")
+		elif rate=${|search "${line[*]}" '[0-9][0-9].[0-9][0-9]\*'}; then
+			# this line has the current mode and its refresh rate
+			out_mode+=("${line[0]}")
+			out_rate+=("${rate%\*}")
+		fi
+	done
+	wait
+
+	if (( ${#out_name[@]} != ${#out_res[@]} \
+	   || ${#out_name[@]} != ${#out_mode[@]} \
+	   || ${#out_name[@]} != ${#out_rate[@]} )); then
+		print -ru2 "$0: error parsing outputs!"
+		return 1
+	fi
+
+	return 0
+}
+
+function output {
+	typeset -i i=$1
+	if (( i < 0 || i >= ${#out_name[@]} )); then
+		print -ru2 "$0: output ${i} doesn't exist"
+		return 1
+	fi
+	OUTPUT=$1
+	print -r "Selected output ${OUTPUT}."
+	return 0
+}
+
+function outputs {
+	typeset -i i=0
+	while (( i < ${#out_name[@]} )); do
+		print -r "Output ${i}:"
+		print -r "  Name       : ${out_name[i]}"
+		print -r "  Resolution : ${out_res[i]}"
+		print -r "  Mode       : ${out_mode[i]}"
+		print -r "  Rate       : ${out_rate[i]}Hz"
+		(( i += 1 ))
+	done
+	return 0
+}
+
+parse_outputs || exit
+output 0      || exit
+
+print -r "Type 'help' to see available commands."
+
+function reset {
+	set -x
+	xrandr --output "${out_name[OUTPUT]}" \
+		--mode "${out_mode[OUTPUT]}" \
+		--rate "${out_rate[OUTPUT]}"
+}
+
+modelines=()
+
+function Modeline {
+	if (( $# < 10 )); then
+		print -ru2 "$0: invalid modeline (need at least 10 parameters)"
+		return 1
+	fi
+
+	typeset name=$1
+	if [[ $name != *_tmp ]]; then
+		name=${name}_tmp
+		shift; set -- "$name" "$@"
+	fi
+
+	# todo: isn't this just checking the current mode?
+	if [[ $name == "${out_mode[OUTPUT]}" ]]; then
+		print -ru2 "$0: a mode named ${name} already exists"
+		return 1
+	fi
+
+	if [[ -z $note_seen && $2 == *.[0-9][0-9][0-9][0-9]* ]]; then
+		print -ru2 "Warning: Pixel clock values are rounded to three decimal digits in xorg.conf."
+		print -ru2 "You can still load this mode using xrandr."
+		note_seen=1
+	fi
+
+	( set -x
+	# add the new mode and switch to it
+	xrandr --newmode "$@"
+	xrandr --addmode "${out_name[OUTPUT]}" "$name"
+	xrandr --output "${out_name[OUTPUT]}" --mode "$name"
+	)
+
+	if (( $? != 0 )); then
+		print -ru2 "Setting the mode failed."
+		print -ru2 "If you see an error like \"configure crtc failed\", it probably means Xorg thinks the"
+		print -ru2 "mode is outside the monitor's specifications."
+		print -ru2 "The limits can be adjusted using options documented on the xorg.conf(5) man"
+		print -ru2 "page. These are \"HorizSync\", \"VertRefresh\", \"MinClock\" and \"MaxClock.\""
+	else
+		print -ru2 "Press any key to go back to the default mode."
+		dd bs=1 count=1 >/dev/null 2>&1
+	fi
+
+	reset
+
+	( set -x
+	# delete the mode
+	xrandr --delmode "${out_name[OUTPUT]}" "$name"
+	xrandr --rmmode "$name"
+	)
+}
+
+# secret algorithm credit: https://rbt.asia/g/thread/51288114/#51295978
+function guessparams {
+	typeset clock=$1
+	typeset -i htotal=$2 vtotal=$3
+
+	typeset -i width=${out_res[OUTPUT]%%x*} height=${out_res[OUTPUT]#*x}
+
+	if (( $# != 3 )); then
+		>&2 echo "usage: $0 <clock MHz> <vtotal> <htotal>"
+		return 1
+	fi
+	if (( htotal <= width )); then
+		print -ru2 "$0: bad htotal (must be higher than width)"
+		return 1
+	fi
+	if (( vtotal <= height )); then
+		print -ru2 "$0: bad vtotal (must be higher than height)"
+		return 1
+	fi
+
+	typeset name=${width}x${height}
+	typeset hz=$(bc <<< "
+	# bc sucks
+	scale = 2;
+	($clock * 1000000) / ($htotal * $vtotal);
+	" 2>&-)
+	if [[ -n $hz ]]; then
+		name=${name}_${hz}
+	else
+		name=${name}_tmp
+	fi
+
+	typeset -i hstart hend vstart vend
+
+	if (( htotal-16 <= width )); then
+		hstart=$width
+		hend=$htotal
+	else
+		hstart=$(( width + 8 ))
+		hend=$(( htotal - 8 ))
+	fi
+
+	if (( vtotal-6 <= height )); then
+		vstart=$height
+		vend=$vtotal
+	else
+		vstart=$(( height + 3 ))
+		vend=$(( vtotal - 3 ))
+	fi
+
+	printf 'Modeline "%s"  %s  %s %s %s %s  %s %s %s %s +HSync +VSync' \
+	    "$name" "$clock" \
+	    "$width" "$hstart" "$hend" "$htotal" \
+	    "$height" "$vstart" "$vend" "$vtotal"
+
+	echo
+}
+
+function dumpmodes {
+	if (( $# > 0 )); then
+		print -ru2 "usage: $0"
+		return 1
+	fi
+	typeset name clock \
+	        width hstart hend htotal \
+	        height vstart vend vtotal \
+	        flags
+	function reset_mode {
+		name= clock=
+		width= hstart= hend= htotal=
+		height= vstart= vend= vtotal=
+		flags=
+	}
+	function print_mode {
+		if [[ -z $name || -z $width || -z $height ]]; then
+			print -ru2 "$0: incomplete modeline"
+			return
+		fi
+		printf 'Modeline "%s"  %s  %s %s %s %s  %s %s %s %s %s\n' \
+			"$name" "$clock" \
+			"$width" "$hstart" "$hend" "$htotal" \
+			"$height" "$vstart" "$vend" "$vtotal" \
+			"$flags"
+		reset_mode
+	}
+	set -o noglob
+	{ exec xrandr --verbose 2>&3 |& } 3>&2 2>&-
+	while IFS= read -pr line; do
+		set -- ${line}
+		if [[ $line == !(" ")* && $2 == "connected" ]]; then
+			echo "# $1"
+		elif [[ $line == "  "!(" ")* && $2 == "(0x"+([0-9a-f])")" ]]; then
+			if [[ -n $name || -n $width || -n $height ]]; then
+				print_mode
+			fi
+			name=$1
+			clock=${3%MHz}
+			shift 3
+			flags=$*
+			flags=${flags//"*current"/}
+			flags=${flags//"+preferred"/}
+			flags=(${flags})
+			flags=${flags[*]}
+		elif [[ $line == "        "!(" ")* && $1 == "h:" ]]; then
+			width=$3
+			hstart=$5
+			hend=$7
+			htotal=$9
+		elif [[ $line == "        "!(" ")* && $1 == "v:" ]]; then
+			height=$3
+			vstart=$5
+			vend=$7
+			vtotal=$9
+		fi
+	done
+	print_mode
+	wait
+	unset -f reset_mode
+	unset -f print_mode
+}

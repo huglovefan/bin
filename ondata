@@ -1,0 +1,18 @@
+#!/bin/sh
+#
+# run a command that reads data from stdin, but only if we actually get some data
+#
+
+if [ $# -eq 0 ]; then
+	>&2 echo "usage: ondata <command>"
+	exit 1
+fi
+b=$(dd bs=1 count=1 2>/dev/null | od -A n -t x1)
+b=${b# }
+[ -n "$b" ] || exit 0
+# is there no POSIX® portable way to print hex escapes?
+{ gawk "END{printf(\"\\x${b}\");}" </dev/null; exec cat; } | exec "$@"
+
+# printf '' | ondata md5sum  # nothing
+# printf '\0' | ondata md5sum  # 93b885adfe0da089cdf634904fd59f71
+# printf '\0\0' | ondata md5sum  # c4103f122d27677c9db144cae1394a66

@@ -1,0 +1,73 @@
+#!/bin/sh
+#
+# check that a core dump isn't stale
+#
+
+core=
+quiet=
+while getopts 'q' o; do
+	case $o in
+	q) quiet=1;;
+	*) exit 1;;
+	esac
+done
+shift $((OPTIND-1))
+if [ $# -ne 1 ]; then
+	>&2 echo "usage: corecheck [-q] <core>"
+	exit 1
+fi
+core=$1
+
+nagged=0
+nag() {
+	if [ -n "$quiet" ]; then
+		# exit early
+		exit 1
+	fi
+	echo "$1"
+	nagged=1
+}
+
+has_debug() {
+	if readelf -S "$1" | grep -q '.debug_info'; then
+		return 0
+	fi
+	if [ -f "/usr/lib/debug/$1.debug" ]; then # gentoo
+		return 0
+	fi
+	if [ -f "/usr/lib/debug/$1" ]; then # void
+		return 0
+	fi
+	return 1
+}
+
+# print exes/libs that were mapped as executable
+llvm-readelf --program-headers --notes "$core" | \
+    awk '/^  LOAD/&&/ R E /{x[$3]=1}n{print substr($0,9);n=0}x[$1]{n=1}' | \
+{
+
+any_ok=0
+while IFS= read -r f; do
+	case $f in
+	*" (deleted)")
+		nag "changed	${f% (deleted)}"
+		continue
+		;;
+	esac
+	if [ ! -f "$f" ]; then
+		nag "deleted	$f"
+		continue
+	fi
+	if [ "$f" -nt "$core" ]; then
+		nag "changed	$f"
+		continue
+	fi
+	if ! has_debug "$f"; then
+		nag "nodebug	$f"
+		continue
+	fi
+	any_ok=1
+done
+exit $(( (!nagged && any_ok) ? 0 : 1 ))
+
+}

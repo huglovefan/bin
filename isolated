@@ -1,0 +1,216 @@
+#!/bin/mksh
+
+if (( $# == 0 )); then
+	print -ru2 "usage: isolated <command>"
+	return 1
+fi
+
+trap '' HUP INT TERM
+
+[[ $KSHUID != 0 ]] || alias doas='command'
+
+if [[ -t 0 ]]; then
+	exec 0<>/dev/null
+fi
+
+# ------------------------------------------------------------------------------
+
+function cpufreq_get {
+	doas cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
+}
+function cpufreq_set {
+	echo "$1" | doas tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor >/dev/null
+	if [[ -e /sys/devices/system/cpu/cpufreq/schedutil/rate_limit_us ]]; then
+		echo 0 | doas tee /sys/devices/system/cpu/cpufreq/schedutil/rate_limit_us >/dev/null
+	fi
+}
+function with_cpufreq {
+	typeset oldgov=$(cpufreq_get 2>/dev/null)
+	if [[ -z $oldgov || $oldgov == "performance" ]]; then
+		"$@"
+		return
+	fi
+	cpufreq_set performance
+	"$@"
+	cpufreq_set "$oldgov"
+}
+
+# ------------------------------------------------------------------------------
+
+# isolated sh -c 'env -i top -bn1 | awk "NF==10&&\$7!=\"T\""'
+# isolated sh -c 'ps -el | awk "\$2!=\"T\"{print\$4}" | while IFS= read -r pid; do readlink "/proc/$pid/exe"; done | grep -o "[^/]\\+\$" | sort -u'
+# isolated mksh -c 'o=$(ps aux); print -r -- "$o" | awk "\$8!~/^T/"'
+
+# doas isolated sh -c 'ps -el | awk "\$3!=\"1000\"&&\$2!=\"T\"{print\$4}" | while IFS= read -r pid; do readlink "/proc/$pid/exe"; done | grep -o "[^/]\\+\$" | sort -u'
+# doas isolated mksh -c 'o=$(ps aux); print -r -- "$o" | awk "\$1!=\"'"$USER"'\"&&\$6!=0&&\$8!~/^T/"'
+
+# do not freeze syslogd if you want tty switching to work
+# do not freeze Xorg unless you've switched away from it
+# do not freeze make or it'll behave weird
+# probably don't want to freeze: mksh, timeout
+typeset freeze_exes='
+ init kthreadd udevd chronyd crond incrond sshd login agetty
+
+ xinit xfwm4 ibus-daemon xbindkeys xfce4-panel dbus-launch dbus-daemon
+ ibus-dconf ibus-ui-gtk3 ibus-x11 ibus-portal xfconfd wrapper-1.0
+ ibus-engine-simple ibus-engine-mozc
+ dconf-service sxhkd mozc_server
+
+ python3.7 python3.8 jackdbus a2jmidid jackmix pulseaudio
+
+ chrome geany bash steam steamwebhelper qbittorrent ssh sshfs mpv nano less
+ man sort xterm top info awk cut dd graph
+ -r
+
+ exo-helper-1 Thunar tumblerd
+'
+function with_freeze {
+	typeset freeze_pids=$(doas pidof -- ${freeze_exes} 2>/dev/null)
+	if [[ -z $freeze_pids ]]; then
+		"$@"
+		return
+	fi
+	doas kill -STOP $freeze_pids 2>/dev/null
+	"$@"
+	doas kill -CONT $freeze_pids 2>/dev/null
+}
+
+# ------------------------------------------------------------------------------
+
+function irqname {
+	doas grep " $1: " /proc/interrupts
+}
+
+typeset -i irq_important_cpu=0
+typeset -i irq_spare_cpu=2
+
+function with_irqs {
+	typeset irq_restore_cmd=""
+	for f in /proc/irq/*/smp_affinity_list; do
+		typeset oldval=$(doas cat "$f" 2>/dev/null)
+		if [[ -z $oldval ]]; then
+			continue
+		fi
+		case $(irqname "$(cut -d/ -f4 <<< "$f")") in
+		*ahci*)
+			echo "$irq_important_cpu" | doas tee "$f" >/dev/null;;
+		*)
+			echo "$irq_spare_cpu" | doas tee "$f" >/dev/null;;
+		esac
+		if (( $? == 0 )); then
+			irq_restore_cmd+="echo \"$oldval\" | doas tee $f >/dev/null;"
+		fi
+	done
+	"$@"
+	eval "$irq_restore_cmd"
+}
+
+# ------------------------------------------------------------------------------
+
+function with_nice {
+	doas ionice -c 1 -n 0 -p $$
+	doas renice -n -20 -p $$ >/dev/null
+
+	doas chrt -f -p 75 $$
+	typeset runtime_oldval=$(doas cat /proc/sys/kernel/sched_rt_runtime_us 2>/dev/null)
+	if [[ -n $runtime_oldval ]]; then
+		echo -1 | doas tee /proc/sys/kernel/sched_rt_runtime_us >/dev/null
+	fi
+
+	"$@"
+
+	if [[ -n $runtime_oldval ]]; then
+		echo "$runtime_oldval" | doas tee /proc/sys/kernel/sched_rt_runtime_us >/dev/null
+	fi
+}
+
+# ------------------------------------------------------------------------------
+
+function with_noaslr {
+	typeset f=/proc/sys/kernel/randomize_va_space
+	typeset oldval=$(doas cat "$f" 2>/dev/null)
+	if [[ -z $oldval || oldval == "0" ]]; then
+		"$@"
+		return
+	fi
+	echo 0 | doas tee "$f" >/dev/null
+	"$@"
+	echo "$oldval" | doas tee "$f" >/dev/null
+}
+
+# ------------------------------------------------------------------------------
+
+function with_noboost {
+	typeset f=/sys/devices/system/cpu/cpufreq/boost
+	typeset oldval=$(doas cat "$f" 2>/dev/null)
+	if [[ -z $oldval || oldval == "0" ]]; then
+		"$@"
+		return
+	fi
+	echo 0 | doas tee "$f" >/dev/null
+	"$@"
+	echo "$oldval" | doas tee "$f" >/dev/null
+}
+
+# ------------------------------------------------------------------------------
+
+function with_nonet {
+	if ! doas rc-service net.eth0 status 2>/dev/null | grep -q 'started'; then
+		"$@"
+		return
+	fi
+	doas rc-service net.eth0 stop >/dev/null 2>&1
+	"$@"
+	doas rc-service net.eth0 start >/dev/null 2>&1
+}
+
+# ------------------------------------------------------------------------------
+
+function with_nosmt {
+	#typeset f=/sys/devices/system/cpu/smt/control
+	#typeset oldval=$(doas cat "$f" 2>/dev/null)
+	#if [[ -z $oldval || oldval == "off" ]]; then
+		"$@"
+	#	return
+	#fi
+	#echo off | doas tee "$f" >/dev/null
+	#"$@"
+	#echo "$oldval" | doas tee "$f" >/dev/null
+}
+
+# ------------------------------------------------------------------------------
+
+typeset taskset_cpus=0
+function with_taskset {
+	#doas taskset -p -c "$taskset_cpus" $$ >/dev/null
+	"$@"
+}
+
+# ------------------------------------------------------------------------------
+
+typeset -i vtswitch_from=1
+typeset -i vtswitch_to=2
+typeset -i vtswitch_time=2
+function with_vtswitch {
+	typeset xorgpid=$(doas pidof Xorg)
+	if [[ -z $xorgpid || -z $DISPLAY ]]; then
+		"$@"
+		return
+	fi
+	unset DISPLAY
+	TERM=linux tput civis | doas tee /dev/tty${vtswitch_to} >/dev/null
+	doas chvt $vtswitch_to & sleep $vtswitch_time
+	doas kill -STOP $xorgpid
+	"$@"
+	doas kill -CONT $xorgpid
+	doas chvt $vtswitch_from & #sleep $vtswitch_time
+	TERM=linux tput cnorm | doas tee /dev/tty${vtswitch_to} >/dev/null
+}
+
+# ------------------------------------------------------------------------------
+
+typeset -i timeout=60
+
+with_cpufreq with_freeze with_nice with_irqs with_noaslr with_noboost \
+    with_nonet with_nosmt with_taskset with_vtswitch \
+    ${timeout:+timeout "$timeout"} "$@"

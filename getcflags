@@ -1,0 +1,102 @@
+#!/bin/bash
+#
+# gets cflags and other variables from /etc/portage/make.conf for exporting in a shell
+#
+
+set -o noglob
+PATH=/var/empty
+ulimit -c 0 # disable core dumps
+ulimit -f 0 # break write()
+ulimit -u 0 # break fork()
+
+# ------------------------------------------------------------------------------
+
+cd /etc/portage || exit
+
+# profile defaults
+CC=cc
+CXX=cxx
+LDFLAGS='-Wl,-O1 -Wl,--as-needed'
+
+. ./make.conf >&2
+for arg; do
+	. /etc/portage/env/"$arg" >&2
+done
+
+# ------------------------------------------------------------------------------
+
+flagvars='CFLAGS CPPFLAGS CXXFLAGS FCFLAGS FFLAGS'
+allvars="
+ ADDR2LINE AR CC CPP CXX CXXFILT DWP LD NM OBJCOPY OBJDUMP RANLIB READELF SIZE
+ STRIP ${flagvars} LDFLAGS"
+
+# normalize whitespace
+spacenorm() {
+	local v
+	for v; do
+		eval "set -- \$${v}; ${v}=\$*"
+	done
+}
+
+spacenorm ${allvars}
+spacenorm FEATURES
+
+# if ccache is in features, make sure CC points to it
+if [[ " $FEATURES " == *" ccache "* ]]; then
+	for v in CC CXX; do
+		eval "vv=\$${v}"
+		[[ -n $vv ]] || continue
+		if [[ -e /usr/lib/ccache/bin/$vv ]]; then
+			vv=/usr/lib/ccache/bin/$vv
+		else
+			vv="ccache $vv"
+		fi
+		eval "${v}=\$vv"
+	done
+fi
+
+# if lto is enabled, add cflags and cxxflags to ldflags
+lto=0
+for flag in ${CFLAGS} ${CXXFLAGS}; do
+	case $flag in
+	-flto|-flto=?*) lto=1;;
+	-fno-lto)       lto=0;;
+	esac
+done
+if (( lto )); then
+	# if cxxflags includes cflags, don't add that part twice
+	tmp=" ${CXXFLAGS} "
+	tmp=${tmp/" $CFLAGS "/}
+	LDFLAGS+=" ${CFLAGS} ${tmp}"
+fi
+
+# if ccache is in features, add -fdiagnostics-color since ccache suppresses it
+if [[ " $FEATURES " == *" ccache "* ]]; then
+	fdc_flags=${flagvars}
+	if (( lto )); then
+		fdc_flags+=" LDFLAGS"
+	fi
+	for v in ${fdc_flags}; do
+		eval "vv=\$${v}"
+		if [[ -n $vv && " $vv " != *" -fdiagnostics-color "* ]]; then
+			eval "${v}+=\" -fdiagnostics-color\""
+		fi
+	done
+fi
+
+spacenorm ${allvars}
+
+for v in ${allvars}; do
+	eval "vv=\$${v}"
+	if [[ -n $vv ]]; then
+		vv=" $vv "
+		#vv=${vv// -Ofast / -Os -ffast-math }
+		#vv=${vv// -Ofast / -O2 -ffast-math }
+		#if [[ $PWD == */cfgfs ]]; then
+		#	vv=${vv// -flto=full / -flto=thin }
+		#	vv=${vv// -fvirtual-function-elimination / }
+		#fi
+		spacenorm vv
+		printf 'export %s=%s\n' "$v" "${vv@Q}"
+	fi
+done

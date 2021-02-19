@@ -1,0 +1,39 @@
+#!/bin/sh
+#
+# shows stdin in a graphical editor
+#
+
+sarg=
+while getopts 's:' o; do
+	case $o in
+	s) sarg=$OPTARG;;
+	*) exit 1;;
+	esac
+done
+shift $(( OPTIND - 1 ))
+
+if [ $# -eq 0 ]; then
+	set -- "${XEDITOR:-mousepad}"
+fi
+
+template=gsponge.XXXXXXXXXX
+
+name=$(readlink /proc/self/fd/0)
+name=${name##*/}
+if [ -n "$name" ]; then
+	template=${name}.${template}
+fi
+if [ -n "$sarg" ]; then
+	template=${template}.${sarg}
+fi
+f=$(mktemp -- "${TMPDIR:-/tmp}/${template}") || exit
+
+trap '' HUP INT TERM
+cat >"$f" || [ -s "$f" ] || exit 1
+{
+	( trap - HUP INT TERM; exec "$@" "$f" )
+	sleep 1
+	rm -f "$f"
+} &
+
+exit 0

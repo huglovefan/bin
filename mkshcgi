@@ -1,0 +1,135 @@
+#!/bin/mksh
+#
+# basic http 1.0 server
+#
+
+NOEXEC=${NOEXEC:-}
+
+if [[ ! -v SOCAT_VERSION ]]; then
+	set -x
+	exec socat tcp-l:${2:-8080},bind=${1:-127.0.0.1},fork,max-children=100,reuseaddr exec:"$0"
+fi
+
+# https://start.duckduckgo.com/lite/?q=phpinfo+%22If+you+did+not+receive+a+copy+of+the+PHP+license%2C+or+have+any+questions+about+PHP+licensing%2C+please+contact+license%40php.net.%22&kp=-2&kl=&df=
+
+IFS=$' \r\n\t'
+read -rt1 m u p || return
+export REQUEST_METHOD="$r"
+export REQUEST_URI="$u"
+export SERVER_PROTOCOL="$p"
+while true; do
+	read -rt1 n v || return
+	[[ -z $n ]] && break
+	typeset -u n=${n%:}; n=${n//[!A-Z0-9]/_}
+	export "HTTP_$n=$v"
+done
+
+function htmlencode {
+	REPLY=${1@/[\"&\'<>]/${|
+		case $KSH_MATCH in
+		'"') REPLY='&quot;';;
+		'&') REPLY='&amp;';;
+		"'") REPLY='&#39;';;
+		'<') REPLY='&lt;';;
+		'>') REPLY='&gt;';;
+		esac
+	}}
+}
+function urldecode {
+	REPLY=${1@/@(%[0-9A-Fa-f][0-9A-Fa-f]|+)/${|
+		typeset s=$KSH_MATCH
+		case $s in
+		%[0-9A-Fa-f][0-9A-Fa-f])
+			eval "REPLY=\$'\\x${s#%}'";;
+		+)
+			REPLY=' ';;
+		esac
+	}}
+}
+function urlencode {
+	[[ -o utf8-mode ]]; typeset u=$?
+	set +U
+	REPLY=${1@/[!A-Za-z0-9\-_.!~*\'()]/${|
+		typeset -i16 c=$((1#$KSH_MATCH))
+		typeset -ZR2 s=${c#*#}
+		REPLY=%$s
+	}}
+	(( u )) || set -U
+}
+
+function s {
+	typeset arg
+	print -r "HTTP/1.0 $1"; shift
+	for arg; do
+		print -r "$arg"
+	done
+	print
+}
+function e { s "$@"; exit 0; }
+function f {
+	l=''
+	l=$(stat -c %s "$1")
+	case $1 in
+	*.apk)  t='';;
+	*.html) t='text/html';;
+	*)      t='';; #t=$(file -b --mime-type "$1");;
+	esac
+        s 200 \
+            ${l:+"Content-Length: $l"} \
+	    ${t:+"Content-Type: $t"}
+	exec cat "$1"
+}
+function x { exec "$1"; }
+function d {
+	cd "$1" || e 403
+	s 200 'Content-Type: text/html; charset=utf-8'
+	typeset f h uh slsh
+	for f in *; do
+		[[ $f == '*' && ! -e $f ]] && break
+		h=${|htmlencode "$f"}
+		uh=${|htmlencode "${|urlencode "$f"}"}
+		slsh=${|[[ -d $f ]] && REPLY=/}
+		print -r "<a href=\"$uh$slsh\">$h$slsh</a><br>"
+	done
+	exit 0
+}
+
+export QUERY_STRING=
+if [[ $u == *\?* ]]; then
+	QUERY_STRING=${u#*\?}
+	set -f; oldifs=$IFS; IFS=\&; set -- $QUERY_STRING; IFS=$oldifs; set +f
+	for pair; do
+		[[ $pair == ?*=* ]] || continue
+		export "GET_${|urldecode "${pair%%=*}"}=${|urldecode "${pair#*=}"}"
+	done
+	set --
+fi
+
+path=${u%%\?*}; path=${|urldecode "$path"}
+[[ $path == /* ]] || e 400
+[[ /$path/ != */.[!/]* ]] || e 403
+path=.$path
+
+[[ -e $path ]] || e 404
+[[ -r $path ]] || e 403
+
+if [[ -d $path ]]; then
+	if [[ $path != */ ]]; then
+		e 302 "Location: ${u%%\?*}/${QUERY_STRING:+?}$QUERY_STRING"
+	fi
+	if [[ -f $path/index.html && -r $path/index.html ]]; then
+		f "$path/index.html"
+	fi
+	if [[ -f $path/index.cgi && -x $path/index.cgi && -r $path/index.cgi ]]; then
+		x "$path/index.cgi"
+	fi
+	d "$path"
+fi
+if [[ -f $path ]]; then
+	if [[ -x $path && $path == *.cgi ]]; then
+		x "$path"
+	fi
+	f "$path"
+fi
+
+e 400

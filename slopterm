@@ -1,0 +1,13 @@
+#!/bin/sh
+
+fontwidth=8
+fontheight=19
+
+s=$(slop -qf '%x %y %w %h') || exit
+
+x=${s%%\ *} s=${s#*\ }
+y=${s%%\ *} s=${s#*\ }
+w=${s%%\ *}
+h=${s#*\ }
+
+exec xterm -geometry "$((w/fontwidth-1))x$((h/fontheight-1))+${x}+${y}" "$@"

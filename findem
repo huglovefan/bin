@@ -1,0 +1,19 @@
+#!/bin/sh
+#
+# like find(1) but shows results as symlinks in a directory
+#
+
+if [ $# -eq 0 ]; then
+	>&2 echo "usage: ${0##*/} <args for find(1)>"
+	exit 1
+fi
+
+targetdir=$(mktemp -d "/tmp/${0##*/}.XXXXXXXXXX") || exit
+chmod 700 "$targetdir"
+
+echo "$targetdir"
+if [[ -n $DISPLAY && -n $WINDOWID && -t 0 && -t 1 ]]; then
+	xdg-open "$targetdir" &
+fi
+
+find "$@" | linkem "$targetdir"

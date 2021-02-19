@@ -1,0 +1,9 @@
+#!/bin/sh
+#
+# count how many new processes are spawned during the execution of a command
+#
+
+oldpid=$(sh -c 'echo $$')
+( exec "$@" )
+newpid=$(sh -c 'echo $$')
+echo $((newpid-oldpid-2))

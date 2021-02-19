@@ -1,0 +1,107 @@
+#!/bin/mksh
+#
+# show details about an elf file (executable or library)
+# i can never remember what the commands are
+#
+# https://www.youtube.com/watch?v=gEfftVsyk_c
+#
+
+function readelf_p {
+	readelf -p "$1" "$2" | \
+	    sed -Ene '/^  \[ *[0-9a-f]+\]  /s/^  \[ *[0-9a-f]+\]  //p'
+}
+
+if [[ ! -f $2 ]]; then
+	for f in \
+		{,/usr{,/local}}{/bin,/sbin}/"$2" \
+		{,/usr{,/local}}/lib{,64,32}/{,lib}"$2"{,.so,.so.[0-9]*} \
+		"$(which "$2")" \
+	; do
+		if [[ -f $f ]]; then
+			print -ru2 "${0##*/}: resolved '${2}' to '${f}'"
+			set -- "$1" "$f"
+			break
+		fi
+	done
+	if [[ ! -f $2 ]]; then
+		print -ru2 "${0##*/}: could not find '${2}'"
+		return 1
+	fi
+fi
+
+get_debugfile() {
+	REPLY=$1
+	return 0
+	typeset name=${1##*/}
+	typeset f
+	if [[ $1 == */lib?(|32|64)/* ]]; then
+		name=${name##lib}
+		name=${name%%.so*}
+		for f in \
+			/usr/lib/debug/{,/usr{,/local}}/lib{,64,32}/{,lib}"$name"{,.so,.so.[0-9]*}.debug \
+		; do
+			if [[ -f $f ]]; then
+				REPLY=$f
+				break
+			fi
+		done
+	else
+		for f in \
+			/usr/lib/debug/{,/usr{,/local}}{/bin,/sbin}/"$name".debug \
+			/usr/lib/debug/"$1".debug \
+		; do
+			if [[ -f $f ]]; then
+				REPLY=$f
+				break
+			fi
+		done
+	fi
+	if [[ -n $REPLY ]]; then
+		print -ru2 "${0##*/}: found debug file '${REPLY}'"
+	else
+		print -ru2 "${0##*/}: couldn't find separate debug info"
+		REPLY=$1
+	fi
+}
+
+case $1 in
+?(defined-)sym?(bol)s)
+	readelf -W --dyn-syms "$2" | \
+	    awk '($4=="FUNC"||$4=="OBJECT")&&$7!="UND"{print$2,$8}' | \
+	    sort
+	;;
+?(defined-)func?(tion)s)
+	readelf -W --dyn-syms "$2" | \
+	    awk '$4=="FUNC"&&$7!="UND"{print$2,$8}' | \
+	    sort
+	;;
+@(need?(ed)|require?(d)|want?(ed))?(-)sym?(bol)s)
+	readelf -W --dyn-syms "$2" | \
+	    awk '($4=="FUNC"||$4=="OBJECT")&&$7=="UND"{print$8}'
+	;;
+?(@(needed|required)-)lib?(rarie)s)
+	objdump -p "$2" | \
+	    awk '$1=="NEEDED"{print$2}'
+	;;
+@(interp?(reter)|loader))
+	readelf_p .interp "$2"
+	;;
+stack?(-size?(-hint)))
+	readelf -Wl "$2" | awk '$1=="GNU_STACK"{print$6}'
+	;;
+# -frecord-gcc-switches
+?(c?(ompiler-))@(flags|cmdline))
+	readelf_p .GCC.command.line "${|get_debugfile "$2"}"
+	;;
+s?(ou)rc?(e?(s)))
+	llvm-dwarfdump --diff "$2" | \
+	    rg -a -e 'DW_AT_call_file' -e 'DW_AT_decl_file' | \
+	    awk '!t[$0]{t[$0]=1;print}' | \
+	    grep -Pao '\("\K/.*(?="\))' | \
+	    awk '!t[$0]{t[$0]=1;print}'
+	;;
+*)
+	print -ru2 "${0##*/}: unknown command '${1}'"
+	return 1
+	;;
+esac

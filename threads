@@ -1,0 +1,34 @@
+#!/bin/sh
+#
+# list the threads of a process
+#
+
+if [ $# -eq 0 ]; then
+	>&2 echo "usage: threads <pid>..."
+	exit 1
+fi
+
+row() {
+	echo "$@"
+}
+
+if [ -t 1 ]; then
+	# reading this using the "read" builtin won't work
+	# it tries to read it one character at a time, but only the first read()
+	#  call will return anything so it only gets the first character
+	pid_max=$(cat /proc/sys/kernel/pid_max)
+	fmt="%-${#pid_max}s %-${#pid_max}s %-15s %s\n"
+	row() {
+		printf "$fmt" "$@"
+	}
+	row pid tid name wchan
+fi
+
+for pid; do
+	for task in /proc/"$pid"/task/[0-9]*; do
+		tid=${task##*/task/}
+		IFS= read -r comm <"$task/comm" || continue
+		read -r _ frame <"$task/stack" || frame=-
+		row "$pid" "$tid" "$comm" "$frame"
+	done
+done

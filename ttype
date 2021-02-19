@@ -1,0 +1,62 @@
+#!/usr/bin/tcc -run
+//
+// fake terminal input using that ioctl
+//
+
+#include <sys/ioctl.h>
+#include <fcntl.h>
+#include <string.h>
+#include <unistd.h>
+
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+#define LIKELY(x) __builtin_expect(!!(x), 1)
+#define UNLIKELY(x) __builtin_expect(!!(x), 0)
+
+static int fd;
+
+static void
+put(const char *c)
+{
+	int rv = ioctl(fd, TIOCSTI, c);
+	if (rv == -1) {
+		fprintf(stderr, "ttype: %s\n", strerror(errno));
+		exit(1);
+	}
+}
+
+int
+main(int argc, char **argv)
+{
+	int nonewline = 0;
+
+	if (LIKELY(argc > 1) && UNLIKELY(strcmp(argv[1], "-n") == 0)) {
+		nonewline = 1;
+		argv += 1;
+		argc -= 1;
+	}
+	if (LIKELY(argc > 1) && UNLIKELY(strcmp(argv[1], "--") == 0)) {
+		argv += 1;
+		argc -= 1;
+	}
+
+	fd = open("/dev/stdout", O_WRONLY);
+	if (UNLIKELY(fd < 0))
+		return 1;
+
+	while (LIKELY(*(++argv) != NULL)) {
+		const char *p = *argv;
+		while (LIKELY(*p != '\0'))
+			put(p++);
+		if (LIKELY(*(argv+1) != NULL))
+			put(" ");
+	}
+	if (LIKELY(!nonewline))
+		put("\n");
+
+	close(fd);
+
+	return 0;
+}

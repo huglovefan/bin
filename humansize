@@ -1,0 +1,11 @@
+#!/bin/sh
+#
+# converts bytes to a human-readable filesize (like GNU ls)
+#
+
+f=$(mktemp) || exit
+trap 'rm -f "$f"' EXIT
+trap 'exit 1' HUP INT TERM
+truncate -s "$1" "$f"
+set -- $(ls -dhl "$f")
+echo "$5"

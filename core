@@ -1,0 +1,54 @@
+#!/bin/sh
+#
+# list core dumps
+#
+
+check=
+while getopts 'c' o; do
+	case $o in
+	c) check=1;;
+	*) exit 1;;
+	esac
+done
+shift $((OPTIND-1))
+if [ $# -eq 1 ]; then
+	cd -- "$1" || exit
+	shift
+fi
+if [ $# -ne 0 ]; then
+	>&2 echo "usage: core [-c] [dir]"
+	exit 1
+fi
+
+set -- $(ls -drt *core* 2>/dev/null | grep -E '^(vg)?core(\.[0-9]+)?$')
+if [ $# -eq 0 ]; then
+	exit 0
+fi
+
+if [ -n "$check" ]; then
+	for file; do
+		shift
+		if corecheck -q "$file"; then
+			set -- "$@" "$file"
+		fi
+	done
+	if [ $# -eq 0 ]; then
+		exit 1
+	fi
+fi
+
+longest=0
+for file; do
+	if [ ${#file} -gt $longest ]; then
+		longest=${#file}
+	fi
+done
+
+for file; do
+	exe=$(file "$file") || continue
+	t=${exe#*"execfn: '"}; [ ${#t} -lt ${#exe} ] || continue
+	exe=$t; t=${t%%"'"*};  [ ${#t} -lt ${#exe} ] || continue
+	exe=$t
+	time=$(date -r "$file" +'%Y-%m-%d %H:%M:%S')
+	printf "%s  %-${longest}s  %s\n" "$time" "$file" "$exe"
+done

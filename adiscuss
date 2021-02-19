@@ -1,0 +1,126 @@
+#!/bin/mksh
+#
+# dig up old discussions of an anime episode from /a/
+#
+
+# todo: print snippet of subject/text
+
+function contains {
+	typeset v=$1
+	shift
+	for arg; do
+		if [[ $arg == "$v" ]]; then
+			return 0
+		fi
+	done
+	return 1
+}
+
+function stripstring {
+	typeset -l v=$1
+	v=${v//[!A-Za-z0-9_]/ }
+	v=${v//[$' \r\n\t']*([$' \r\n\t'])/ } # didn't know this would need $''
+	v=${v##[$' \r\n\t']*([$' \r\n\t'])}
+	v=${v%%[$' \r\n\t']*([$' \r\n\t'])}
+	REPLY=$v
+}
+function filename_matches {
+	[[ ${|stripstring "$1"} == *"$query"* ]]
+}
+
+function urlencode {
+	[[ -o utf8-mode ]]; typeset u=$?
+	set +U
+	REPLY=${1@/[!A-Za-z0-9\-_.!~*\'()]/${|
+		typeset -i16 c=$((1#$KSH_MATCH))
+		typeset -ZR2 s=${c#*#}
+		REPLY=%$s
+	}}
+	(( u )) || set -U
+}
+
+query=${|stripstring "${*}"}
+
+if [[ -z $query ]]; then
+	print -ru2 "usage: adiscuss <part of a filename to search for>"
+	print -ru2 "finds archived /a/ threads probably discussing a specific episode"
+	print -ru2 "example:"
+	print -ru2 "    adiscuss 'id invaded 07'"
+	print -ru2 "note: the words have to appear together in the filename"
+	return 1
+fi
+
+pat_filenames='<a[^>]+class="post_file_filename"[^>]+title="\K[^"]+'
+pat_threads='<span class="post_controls">\s*<a href="\K[^"#]+'
+pat_dates='<time datetime="\K..........'
+
+seen_threads=()
+
+r=/tmp/adiscuss.tmp.html
+IFS=$'\n'
+typeset -i page=1
+typeset -i pagesize=25
+typeset -i resultcount=-1
+
+trap 'rm -f "$r"' EXIT
+trap 'exit 1' HUP INT TERM
+
+while true; do
+
+	#if (( resultcount >= 0 )); then
+	#	total=$(( resultcount/pagesize+!!(resultcount%pagesize) ))
+	#	print -r "checking page ${page} of ${total}..."
+	#else
+	#	print -r "checking page ${page}..."
+	#fi
+
+	ari curl -so "$r" "https://desuarchive.org/a/search/filename/${|urlencode "$query"}/order/asc/page/$page/"
+
+	resultcount=$(grep -Pom1 '[0-9]+(?= results found\.)' "$r")
+	filenames=( $(grep -Po "$pat_filenames" "$r") )
+	threads=( $(grep -Po "$pat_threads" "$r") )
+	dates=( $(grep -Po "$pat_dates" "$r") )
+
+	cnt=${#filenames[@]}
+	sd=?
+	ed=?
+	if (( ${#dates[@]} > 0 )); then
+		sd=${dates[0]}
+		ed=${dates[${#dates[@]}-1]}
+	fi
+	#print -r "checking ${cnt} post(s) between ${sd} and ${ed}..."
+
+	typeset -i i=0
+	while (( i < ${#filenames[@]} )); do
+
+		if ! filename_matches "${filenames[i]}"; then
+			(( i += 1 ))
+			continue
+		fi
+
+		if contains "${threads[i]}" "${seen_threads[@]}"; then
+			(( i += 1 ))
+			continue
+		fi
+
+		print -r "${dates[i]}: ${threads[i]}"
+		#print -r "found a thread: ${threads[i]} (~${dates[i]})"
+		#xdg-open "${threads[i]}" >/dev/null 2>&1 &
+		seen_threads+=("${threads[i]}")
+
+		(( i += 1 ))
+	done
+
+	if (( ${#filenames[@]} != pagesize )); then
+		print -r "end reached"
+		break
+	fi
+
+	total=$(( resultcount/pagesize+!!(resultcount%pagesize) ))
+	print -nr "page $page/$total from ${sd}~${ed} - next? "
+	#print -r "press enter to continue to page $((page+1))"
+	read -r _ || break
+
+	(( page += 1 ))
+
+done

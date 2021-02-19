@@ -1,0 +1,59 @@
+#!/usr/bin/lua5.4
+--
+-- snips utf-8 text with (basic) ansi colors to $COLUMNS terminal columns
+-- similar to "less -RS" but without the built-in pager
+--
+
+local wcwidth = require 'wcwidth'
+
+local columns = tonumber(os.getenv('COLUMNS'))
+if not columns then
+	columns = io.popen('exec tput cols 2>/dev/null'):read('n') or 80
+end
+
+-- returns a table containing all byte positions related to escape sequences in the string
+-- values in the table are
+-- * -1 (if that position is part of a sequence but not the first character)
+-- * the position of the last character in the sequence (if it is the first character of a sequence)
+-- the full sequence can be sliced out using this like line:sub(pos, escapes[pos])
+local find_escapes = function (line)
+	local escapes = {}
+	local i = 1
+	while i <= #line do
+		local stp, endp = line:find('\27%[[0-9]+m', i)
+		if stp then
+			escapes[stp] = endp
+			for i = stp+1, endp do
+				escapes[i] = -1
+			end
+			i = endp+1
+		else
+			break
+		end
+	end
+	return escapes
+end
+
+for line in io.stdin:lines() do
+	local escapes = find_escapes(line)
+	local linelen = 0
+	for pos, c in utf8.codes(line) do
+		if not escapes[pos] then
+			if linelen <= columns then
+				local l = wcwidth(c)
+				if l >= 0 then
+					linelen = linelen+l
+				end
+				if linelen <= columns then
+					io.stdout:write(utf8.char(c))
+				end
+			end
+		else
+			-- even if it's past the length limit, we can just write all the escapes normally since they don't take up any space
+			if escapes[pos] ~= -1 then
+				io.stdout:write(line:sub(pos, escapes[pos]))
+			end
+		end
+	end
+	io.stdout:write('\n')
+end

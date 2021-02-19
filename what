@@ -1,0 +1,59 @@
+#!/bin/mksh
+#
+# finds all occurrences of a command in $PATH
+#
+
+function path_lookup_all {
+	set -o noglob
+	typeset name=$1 callback=$2
+	typeset dirs dir oldifs=$IFS
+	REPLY=()
+	IFS=:; dirs=(${PATH}); IFS=$oldifs
+	typeset dir
+	for dir in "${dirs[@]}"; do
+		if [[ -z $dir ]]; then
+			dir=.
+		fi
+		if [[ -f $dir/$name && -x $dir/$name || -L $dir/$name ]]; then
+			REPLY+=("$dir/$name")
+		fi
+	done
+	[[ ${#REPLY[@]} -gt 0 ]]
+}
+
+function do_file {
+	typeset file=$1 arr=
+	while true; do
+		print -rn -- "$arr$file"; arr=' -> '
+		if [[ -L $file ]]; then
+			cd "$(dirname "$file")"
+			file=$(readlink "$file")
+			continue
+		fi
+		if [[ ! -e $file ]]; then
+			print -rn " -> ?"
+			break
+		fi
+		if [[ $file != /* ]]; then
+			file=$(realpath "$file")
+			continue
+		fi
+		break
+	done
+	echo
+}
+
+if (( $# == 0 )); then
+	print -ru2 "usage: what <command>"
+	return 1
+fi
+
+if [[ $1 != */* ]]; then
+	path_lookup_all "$1" || return
+	for file in "${REPLY[@]}"; do
+		print -rn -- "$1 -> "
+		do_file "$file"
+	done
+else
+	do_file "$1"
+fi

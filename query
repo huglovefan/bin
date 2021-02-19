@@ -1,0 +1,115 @@
+#!/bin/mksh
+#
+# faster equery clone
+#
+
+PD=/var/db/pkg
+function n2p {
+	case $1 in
+	+([0-9A-Za-z_-]))
+		set -- "$PD"/*/"$1"-[0-9]*;;
+	+([0-9A-Za-z_-])/+([0-9A-Za-z_-])-[0-9]*([0-9A-Za-z_-]))
+		set -- "$PD"/"$1";;
+	+([0-9A-Za-z_-])/+([0-9A-Za-z_-]))
+		set -- "$PD"/"$1"-[0-9]*;;
+	'*')
+		REPLY=( $(find "$PD" -mindepth 2 -maxdepth 2 -printf '%P\n') )
+		return $(( ${#REPLY[@]} != 0 ? 0 : 1 ))
+		;;
+	+([0-9A-Za-z_-])/?('*'))
+		typeset cat=${1%/*}
+		REPLY=( $(find "$PD/$cat" -mindepth 1 -maxdepth 1 -printf "$cat/%P\\n") )
+		return $(( ${#REPLY[@]} != 0 ? 0 : 1 ))
+		;;
+	*)
+		return 1;;
+	esac
+	if [[ $# -eq 1 && ! -e $1 ]]; then return 1; fi
+	REPLY=()
+	for arg; do
+		REPLY+=("${arg:${#PD}+1}")
+	done
+}
+function guess_meaning {
+	typeset t
+	if [[ $1 == /* ]]; then
+		print -r "$1"
+		return
+	fi
+	if [[ $1 == lib?* ]]; then
+		t=(
+			/lib{,64,32}/"$1".@(so*|.a)
+			/usr/lib{,64,32}/"$1".@(so*|.a)
+		)
+		for arg in "${t[@]}"; do
+			if [[ -e $arg ]]; then
+				print -ru2 "$1: guessed meaning: $arg"
+				print -r "$arg"
+				return 0
+			fi
+		done
+	fi
+	if t=$(which "$1") 2>/dev/null; then
+		print -ru2 "$1: guessed meaning: $t"
+		print -r "$t"
+		return
+	fi
+	print -ru2 "$1: not an absolute path or an executable name"
+	return 1
+}
+function die { print -ru2 -- "$@"; exit 1; }
+case $1:$(($#-1)) in
+@(b|belongs):[0-9]*) shift
+	{
+	if (( $# == 0 )); then
+		cat
+	else
+		for arg; do
+			if ! guess_meaning "$arg"; then
+				echo q
+				exit 1
+			fi
+		done
+	fi
+	typeset -i pos=${#PD}+1
+	for pkgd in $PD/*/*; do
+		echo "pkg ${pkgd:pos}"
+		cat "$pkgd/CONTENTS"
+	done 2>/dev/null
+	} | mawk '
+	function printit() { print substr(pkgl, 5); if (!--wantcnt) exit; }
+	#function dprintit() { print substr(pkgl, 5); }
+	/^o/ { f=substr($0, 5); sub(/ ................................ [0-9]+$/, "", f); if (want[f]) printit(); next; }
+	#/^d/ { if (want[$0]) dprintit(); next; }
+	/^d/ { next; }
+	/^s/ { if (want[substr($0, 5, index($0, " -> ")-5)]) printit(); next; }
+	/^p/ { pkgl=$0; next; }
+	#/^\// { if (!want[$0]) { want[$0]=1; want["dir " $0]=1; wantcnt++; } next; }
+	/^\// { if (!want[$0]) { want[$0]=1; wantcnt++; } next; }
+	/^q/ { exit 1; }
+	'
+	;;
+@(f|files):[1-9]*) shift
+	for arg; do
+		n2p "$arg" || return
+		for pkg in "${REPLY[@]}"; do
+			cat "$PD/$pkg/CONTENTS"
+		done
+	done | mawk '
+	/^o/ { f=substr($0, 5); sub(/ ................................ [0-9]+$/, "", f); print f; next; }
+	/^s/ { print substr($0, 5, index($0, " -> ")-5); next; }
+	'
+	;;
+@(l|list):*) shift
+	if (( $# == 0 )); then
+		set -- '*'
+	fi
+	for arg; do
+		n2p "$arg" || return
+		print -l "${REPLY[@]}"
+	done
+	;;
+*)
+	return 1
+	;;
+esac

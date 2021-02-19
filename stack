@@ -1,0 +1,53 @@
+#!/bin/sh
+#
+# prints the stack trace of a core or pid
+#
+
+all=
+arg=
+type=
+while getopts '1ac:p:' o; do
+	case $o in
+	1) arg=$(ls -drt *core* 2>/dev/null | \
+	         grep -E '^(vg)?core(\.[0-9]+)?$' | \
+	         tail -n1)
+	   type=${type}c
+	   if [ -z "$arg" ]; then
+	   	>&2 echo "stack: no core dump found"
+	   	exit 1
+	   fi
+	   ;;
+	a) all=1;;
+	c) arg=$OPTARG; type=${type}c;;
+	p) arg=$OPTARG; type=${type}p;;
+	*) exit 1;;
+	esac
+done
+shift $((OPTIND-1))
+
+if [ $# -gt 0 -o -z "$arg" -o -z "$type" ]; then
+	>&2 echo "usage: stack [-1] [-a] [-c <core>] [-p <pid>]"
+fi
+
+set --
+
+if [ -t 1 ]; then
+	set -- "$@" --one-line 'settings set use-color 1'
+fi
+if [ -n "$all" ]; then
+	set -- "$@" --one-line 'bt all'
+else
+	set -- "$@" --one-line 'bt'
+fi
+
+case $type in
+?)   set -- "$@" -$type "$arg";;
+??*) >&2 echo "stack: can only provide one core or pid"; exit 1;;
+esac
+
+(
+	lldb "$@" &
+	p=$!
+	trap 'trap - HUP INT TERM; kill $p' HUP INT TERM
+	wait
+) | awk '$1=="(lldb)"&&$2=="bt"{p=1;next}p;END{exit!p}'

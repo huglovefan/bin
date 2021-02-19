@@ -1,0 +1,20 @@
+#!/bin/mksh
+#
+# run a command in a pseudo-terminal to make it produce colorized output even when piped
+#
+
+if (( $# == 0 )); then
+	print -ru2 "usage: ${0##*/} <command>"
+	return 1
+fi
+
+function shellquote {
+	REPLY="'${1//"'"/"'\\''"}'"
+}
+
+cmd='exec'
+for arg; do
+	cmd+=" ${|shellquote "$arg"}"
+done
+
+eval "exec script -c \"\$cmd\" -e -f -q /dev/null </dev/null"

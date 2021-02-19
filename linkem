@@ -1,0 +1,61 @@
+#!/bin/sh
+#
+# symlink filenames from stdin to a directory (for the findem script)
+#
+
+if [ $# -ne 1 ]; then
+	>&2 echo "usage: ${0##*/} <targetdir>"
+	exit 1
+fi
+
+targetdir=$1
+
+if [ ! -d "$targetdir" ]; then
+	>&2 echo "${0##*/}: target dir '${targetdir}' is not a directory"
+	exit 1
+fi
+
+rv=1
+
+# path can be full, relative or just the name
+while IFS= read -r path; do
+
+	# strip trailing slashes
+	while case $path in */);;*)false;esac; do
+		path=${path%/}
+	done
+
+	# make absolute
+	case $path in
+	/*)	;;
+	'')	continue;;
+	*)	path=$PWD/$path;;
+	esac
+
+	basename=${path##*/}
+
+	name=${basename%.*}
+	ext=${basename##*.}
+	if [ -z "$name" -o -z "$ext" -o "$name" = "$ext" ]; then
+		# dotfile or no extension
+		name=$basename
+		ext=
+	else
+		ext=".${ext}"
+	fi
+
+	if [ -e "${targetdir}/${name}${ext}" ]; then
+		i=1
+		while [ -e "${targetdir}/${name} (${i})${ext}" ]; do
+			i=$(( i+1 ))
+		done
+		name="${name} (${i})"
+	fi
+
+	if ln -s "$path" "${targetdir}/${name}${ext}"; then
+		rv=0
+	fi
+
+done
+
+exit "$rv"

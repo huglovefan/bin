@@ -1,0 +1,148 @@
+#!/bin/sh
+#
+# watched [-a] [-d] [-e] [-l] [words]
+#   -a: show ancient entries (default: 2wk, -a: 1mo, -aa: 3mo, -aaa: all)
+#   -d: delete entries instead of printing (must specify a filter)
+#   -e: existing files only
+#   -l: long output (full paths)
+#   words: show only files containing words
+#
+
+aflag=0
+while getopts 'adel' o; do
+	case $o in
+	a)     aflag=$((aflag+1));;
+	[del]) eval ${o}flag=1;;
+	*)     exit 1;;
+	esac
+done
+shift $((OPTIND-1))
+
+has_filter=
+if [ $# -gt 0 ]; then
+	# - split the command line into "words" (including only characters that can be matched as-is by sh and sed)
+	# - build a shell match function and sed expression based on that
+	# example: "[SubGroup] show name - 01.mkv"
+	# -> shell pattern "*SubGroup*show*-*name*01*mkv*"
+	# -> sed expression: (same thing but with .* instead of *)
+	set -o noglob # don't try to match filenames here
+	nonword='[-/]' # non-\w characters to also match
+	regex="\\w(\\w|${nonword})*|${nonword}+\\w(\\w|${nonword})*"
+	set -- $(printf '%s\n' "$@" | grep -Eao "$regex" | sed 's/[a-z]/[\u\0\l\0]/gi')
+	set +o noglob
+	if [ $# -gt 0 ]; then
+		has_filter=1
+		code="test_filter() { case \$1 in *"
+		sed="s,"
+		for word; do
+			shift
+			code="$code$word"
+			sed="$sed$word"
+			if [ $# -gt 0 ]; then
+				code="$code*"
+				sed="$sed\\|"
+			fi
+		done
+		code="$code*) return 0;; *) return 1;; esac; }"
+		sed="$sed,\\x1b[1m\\0\\x1b[0m,g"
+		eval "$code"
+	fi
+else
+	# no keywords to highlight
+	# try some dumb stuff like
+	# - highlighting the first character of the show name (first char outside any brackets)
+	# - highlighting the episode number
+	# - dimming parts inside brackets
+	sed='
+	#s/(^|] )([A-Za-z])/\1\x1b[1m\2\x1b[0m/
+	#s/( )([0-9]+)( )/\1\x1b[1m\2\x1b[0m\3/
+	s/\[[^\x5d]*?\]/\x1b[2m\0\x1b[0m/g
+	s/\([^)]*?\)/\x1b[2m\0\x1b[0m/g
+	s/ (-) / \x1b[2m\1\x1b[0m /g
+	s/-[0-9A-Za-z]{11}\.(mkv|mp4)$/\x1b[2m\0\x1b[0m/
+	s/\.[0-9.a-z]+/\x1b[2m\0\x1b[0m/
+	'
+	# maybe but dont: sed -E 's/\W+/\x1b[2m\0\x1b[0m/g'
+	# it would be nice if this used the multiple replacements thing i wrote
+	# or if sed could use perl regexps with lookarounds
+	# ^ can't perl do sed's job though?
+fi
+
+cd ~/.config/mpv/watch_later || exit
+
+list_savedata() {
+	timexpr=
+	if [ $aflag -eq 0 ]; then
+		timexpr="-mtime -$((14+1))"
+	elif [ $aflag -eq 1 ]; then
+		timexpr="-mtime -$((31+1))"
+	elif [ $aflag -eq 2 ]; then
+		timexpr="-mtime -$((31*3+1))"
+	fi
+	find . \
+	    -mindepth 1 -maxdepth 1 \
+	    -type f \
+	    ${timexpr} \
+	    -printf '%TF %TT %P\n'
+}
+
+read_savedata() {
+	while read -r date time hash; do
+		IFS= read -r line <"$hash"
+		case $line in
+		'# '*) path=${line#\# };;
+		*)     continue;;
+		esac
+		if [ -n "$has_filter" ] && ! test_filter "$path"; then
+			continue
+		fi
+		if [ -n "$eflag" ] && ! [ -e "$path" ]; then
+			continue
+		fi
+		if [ -z "$lflag" ]; then
+			path=${path##*/}
+		fi
+		printf '%s %s %s\n' "$date" "${time%%.*}" "$path"
+	done
+}
+
+delete_savedata() {
+	if ! [ -n "$has_filter" -a -n "$dflag" ]; then
+		return 1
+	fi
+	while read -r date time hash; do
+		IFS= read -r line <"$hash"
+		case $line in
+		'# '*) path=${line#\# };;
+		*)     continue;;
+		esac
+		if [ -n "$eflag" ] && ! [ -e "$path" ]; then
+			continue
+		fi
+		if test_filter "$path"; then
+			rm -fv -- "$hash"
+		fi
+	done
+}
+
+highlight_output() {
+	if [ -t 1 ]; then
+		sed -E "$sed" | tsnip
+	else
+		cat
+	fi
+}
+
+if [ -n "$has_filter" ]; then
+	if [ -n "$dflag" ]; then
+		list_savedata | delete_savedata
+	else
+		list_savedata | read_savedata | highlight_output
+	fi
+else
+	if [ -n "$dflag" ]; then
+		>&2 echo "watched: -d can only be used when a filter is specified"
+		exit 1
+	fi
+	list_savedata | sort | read_savedata | highlight_output
+fi

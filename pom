@@ -1,0 +1,490 @@
+#!/bin/mksh
+#
+# various things for portage (2-3 scripts pasted together)
+# i forgot what the name meant
+#
+
+if (( $# == 0 )); then
+	if [[ -z $POM_SH ]]; then
+		ENV=$0 HAS_ENV=${OLDENV:+1} OLDENV=$ENV POM_SH=1 exec -a pom /bin/mksh
+		exit
+	else
+		unset ENV
+		if [[ -n $HAS_ENV ]]; then export ENV="$OLDENV"; fi
+		unset HAS_ENV OLDENV POM_SH
+	fi
+fi
+
+[[ $KSHUID != 0 ]] || alias doas='command'
+
+# ------------------------------------------------------------------------------
+
+#
+# shortcuts for editing files in /etc/portage/
+#
+
+function _editit {
+	case $# in
+	1) ls -Fahl /etc/portage/package.$1;;
+	2) doas nano /etc/portage/package.$1/$2;;
+	*) print -ru2 "usage: $1 [file]"; return 1;;
+	esac
+}
+
+function keywords { _editit accept_keywords "$@"; }
+function cflags { _editit cflags "$@"; }
+function env { _editit env/../env "$@"; }
+function penv { _editit env "$@"; }
+function license { _editit license "$@"; }
+function mask { _editit mask "$@"; }
+function unmask { _editit unmask "$@"; }
+function use { _editit use "$@"; }
+function make.conf { doas nano /etc/portage/make.conf; }
+function provided { doas nano /etc/portage/profile/package.provided; }
+function world { doas nano /var/lib/portage/world; }
+
+alias {keyword,kw,pac,ac}='keywords'
+alias {licenses,l,lic,pl}='license'
+alias {uses,pu,u}='use'
+alias {cflag,cf,pc,pcf}='cflags'
+alias {mc,mkc,mk}='make.conf'
+alias {msk,ms,masks}='mask'
+alias {pp,pro,provide,provides}='provided'
+alias {wo,wor}='world'
+
+# ------------------------------------------------------------------------------
+
+#
+# tools for querying packages
+#
+
+# "equery b" clone optimized for extremely hihg speed
+# takes full paths from stdin, not as arguments and also not relative paths
+function pomquery_b {
+	{
+	if (( $# == 0 )); then
+		cat
+	else
+		print -lr -- "$@"
+	fi
+	typeset -i pos=${#PD}+1
+	for pkgd in $PD/*/*; do
+		echo "pkg ${pkgd:pos}"
+		cat "$pkgd/CONTENTS"
+	done 2>/dev/null
+	} | awk '
+	function printit() { print substr(pkgl, 5); if (!--wantcnt) exit; }
+	function dprintit() { print substr(pkgl, 5); }
+	/^o/ { f=substr($0, 5); sub(/ ................................ [0-9]+$/, "", f); if (want[f]) printit(); next; }
+	/^d/ { if (want[$0]) dprintit(); next; }
+	/^s/ { if (want[substr($0, 5, index($0, " -> ")-5)]) printit(); next; }
+	/^p/ { pkgl=$0; next; }
+	/^\// { if (!want[$0]) { want[$0]=1; want["dir " $0]=1; wantcnt++; } next; }
+	'
+}
+
+function n2p {
+	case $1 in
+	+([0-9A-Za-z_-]))
+		set -- "$PD"/*/"$1"-[0-9]*;;
+	+([0-9A-Za-z_-])/+([0-9A-Za-z_-]))
+		set -- "$PD"/"$1"-[0-9]*;;
+	*)
+		return 1;;
+	esac
+	if [[ $# -ne 1 ]]; then return 1; fi
+	if [[ ! -e $1 ]]; then return 1; fi
+	REPLY=${1:${#PD}+1}
+}
+
+function pomquery_f {
+	if ! p=${|n2p "$1"}; then
+		print -ru2 "$1: no such package"
+		return 1
+	fi
+	awk '
+	/^o/ { f=substr($0, 5); sub(/ ................................ [0-9]+$/, "", f); print f; next; }
+	#/^d/ { next; }
+	/^s/ { print substr($0, 5, index($0, " -> ")-5); next; }
+	' "$PD/$p/CONTENTS"
+}
+
+function Lstatic-libs {
+	grep -EH '\.a [0-9a-f]{32} [0-9]+$' "$PD"/*/*/CONTENTS | \
+	    cut -d/ -f5-6 | \
+	    awk '!t[$0]{t[$0]=1;print}'
+}
+
+PD=/var/db/pkg
+DD=/usr/src/debug
+WF=/var/lib/portage/world
+
+function help {
+	# outdated
+	cat <<- EOF
+	L			list all installed packages
+	Lmanual			list manually installed packages
+	Lsrc			list packages containing binaries
+	Lno-src			list packages without binaries
+	---
+	Folder-than make.conf	filter to packages older than make.conf
+	Folder-than <pkg>	filter to packages older than <pkg>
+	Fc++			filter to packages containing c++ code
+	Fcflags <grep args>	filter by cflags
+	Fcxxflags <grep args>	filter by cxxflags
+	Fnot <filter>		invert another filter
+	---
+	Esize			add size column
+	Edate			add install date column
+	E-			remove added column
+	---
+	Xrebuild		rebuild packages from stdin
+	EOF
+}
+
+# lines come in
+# ^ i forgot what this comment meant
+
+function turbo {
+	typeset tmpdir
+	tmpdir=$(mktemp -d) || return
+	xargs -d'\n' -r -n1 -P5 /bin/sh -c '
+	exec >"$1/$$"; shift
+	'"$1"'
+	' -- "$tmpdir"
+	cat "$tmpdir"/*
+	rm -r "$tmpdir"
+}
+
+function L {
+	find "$PD" -mindepth 2 -maxdepth 2 -type d -printf '%P\n'
+}
+
+function Ldeps {
+	for arg; do lddtree "$arg"; done | awk '$2=="=>"&&!t[$3]++{print$3}' | xargs -rd'\n' equery b | awk '!t[$0]++'
+}
+
+function Lupd {
+	cut -b 18- <"$1" | cut -d ' ' -f1
+}
+
+function Lfind {
+	find "$@" -exec equery b {} + | awk '!t[$0]++'
+}
+
+function Lmanual {
+	equery l $(</var/lib/portage/world) | awk '/./&&!t[$0]++'
+}
+
+function Felf {
+	while IFS= read -r pkg; do
+		grep -Po 'obj \K(?!/usr/src/)(.+)(?= [^ ]+ [^ ]+$)' /var/db/pkg/"$pkg"/CONTENTS | \
+		while IFS= read -r file; do
+			if [[ -f $file && $(doas dd if="$file" skip=1 bs=1 count=3 2>/dev/null) == ELF ]]; then
+				print -r -- "$pkg"
+				break
+			fi
+		done
+	done
+}
+function Lsrc {
+	find "$DD" -mindepth 2 -maxdepth 2 -type d -printf '%P\n'
+}
+function Lno-src {
+	L | while IFS= read -r pkg; do
+		if [[ ! -e $DD/$pkg ]]; then
+			print -r -- "$pkg"
+		fi
+	done
+}
+function Lno-no-src {
+	L | while IFS= read -r pkg; do
+		if [[ -e $DD/$pkg ]]; then
+			print -r -- "$pkg"
+		fi
+	done
+}
+
+function Fsrc {
+	while IFS= read -r pkg; do
+		if [[ -e $DD/$pkg ]]; then
+			print -r -- "$pkg"
+		fi
+	done
+}
+
+function Fhasuse {
+	while IFS= read -r pkg; do
+		flags=$(<$PD/$pkg/USE)
+		if [[ " $flags " == *" $1 "* ]]; then
+			print -r -- "$pkg"
+		fi
+	done
+}
+
+# bug: "media-fonts/font-bitstream-100dpi-1.0.3-r2"
+# the version matching isn't so simple
+# check if the bit is only numbers?
+# or if the next thing is a dot or end? [0-9](?=\.|$) (mksh pattern equivalent)
+
+function Fbuildable {
+	while IFS= read -r pkg; do
+		cat=${pkg%%/*}
+		pv=${pkg#*/}
+		pn=${pv%%-[0-9]*}
+		repo=$(<$PD/$pkg/repository)
+		if [[ $repo != x-portage ]]; then
+			eb=/var/db/repos/$repo/$cat/$pn/$pv.ebuild
+		else
+			eb=/usr/local/portage/$cat/$pn/$pv.ebuild
+		fi
+		if [[ -f $eb ]]; then
+			print -r -- "$pkg"
+		else
+			print -ru2 "Fbuildable: skipping $pkg (ebuild \"$eb\" not found)"
+		fi
+	done
+}
+
+function Lrunning-code {
+	typeset doas=
+	if [[ $1 == -r ]]; then
+		doas=doas
+		shift
+	fi
+	if (( $# != 0 )); then
+		for pid; do
+			if [[ $pid == +([0-9]) ]]; then
+				${doas} cat /proc/"$pid"/maps
+			else
+				typeset -i ok=0
+				for pid in $(${doas} pidof -- "$pid"); do
+					cat /proc/"$pid"/maps
+					ok=1
+				done
+				if (( ! ok )); then
+					print -ru2 -- "$pid: no process found"
+				fi
+			fi
+		done
+	else
+		if [[ -n $doas ]]; then
+			cat /proc/*/maps
+		else
+			doas sh -c 'cat /proc/*/maps'
+		fi
+	fi | \
+	    awk '$2~/x/{f=substr($0,74);if(!t[f]){t[f]=1;if(f~/^\//)print f}}' | \
+	    pom pomquery_b | \
+	    awk '!t[$0]{t[$0]=1;print}'
+}
+
+function Fexclude {
+	while IFS= read -r pkg; do
+		for arg; do
+			if [[ $pkg == */"$arg"-[0-9]* ]]; then
+				continue 2
+			fi
+		done
+		print -r -- "$pkg"
+	done
+}
+
+function Fdead-deps {
+	while IFS= read -r pkg; do
+		grep -Po 'obj \K(.+)(?= [^ ]+ [^ ]+$)' /var/db/pkg/"$pkg"/CONTENTS | \
+		while IFS= read -r file; do
+			[[ -x $file ]] || continue
+			t=$(llvm-dwarfdump --diff "$file" 2>/dev/null | \
+			    gawk '
+				$1=="DW_AT_decl_file"{
+					s=gensub(/[^(]*\("(.*)"\).*/,"\\1",1);
+					if(s~/^\/var\/tmp\/portage\//)next;
+					if(s~/<built-in>$/)next;
+					if(!t[s]++)print(s);
+				}
+			    ' | \
+			while IFS= read -r line; do
+				[[ $line != /usr/src/debug/"$pkg"/* && ! -e $line ]] || continue
+				print -ru2 "f: $line"
+				print -ru2 "x: $file"
+				print -r -- "$pkg"
+				break
+			done)
+			if [[ -n $t ]]; then
+				print -r -- "$t"
+				break
+			fi
+		done
+	done
+}
+
+# get files
+# filter to elfs
+# filter to source files
+# equery b
+function Tlinked-deps {
+	if [[ $1 == -r ]]; then
+		shift
+		for arg; do lddtree "$arg"; done | awk '{print$3}' | xargs -rd'\n' -n1 llvm-dwarfdump
+	else
+		for arg; do llvm-dwarfdump "$arg"; done
+	fi | \
+	gawk '$1=="DW_AT_decl_file"{s=gensub(/[^(]*\("(.*)"\).*/,"\\1",1);if(!t[s]++&&s!~/\.(h|hh|hpp)/)print(s)}' | \
+	xargs -rd'\n' equery b | \
+	awk '!t[$0]++'
+}
+
+function Ffindsrc {
+	while IFS= read -r pkg; do
+		if [[ -d $DD/$pkg && -n $(find "$DD/$pkg" \( "$@" \) -print -quit) ]]; then
+			print -r -- "$pkg"
+		fi
+	done
+}
+
+function Fnot {
+	typeset id=${RANDOM}
+	# need to sort twice because comm is picky
+	sort | tee /tmp/Fnot.$id.1 | "$@" | sort >/tmp/Fnot.$id.2
+	comm -23 /tmp/Fnot.$id.{1,2}
+	rm -f /tmp/Fnot.$id.{1,2}
+}
+
+# todo: find(1) had an option that could do this
+function Folder-than {
+	if [[ $1 == make.conf ]]; then
+		# get out of $PD
+		set -- /../../../../../../../../../../../etc/portage/make.conf
+	fi
+	while IFS= read -r pkg; do
+		if [[ $PD/$pkg -ot $PD/$1 ]]; then
+			print -r -- "$pkg"
+		fi
+	done
+}
+function Fc++ {
+	while IFS= read -r pkg; do
+		if [[ -d $DD/$pkg && -n $(find "$DD/$pkg" \( -iname '*.cpp' -or -iname '*.cc' \) -print -quit) ]]; then
+			print -r -- "$pkg"
+		fi
+	done
+}
+function Fcflags {
+	while IFS= read -r pkg; do
+		if [[ -f $PD/$pkg/CFLAGS ]] && cat $PD/$pkg/CFLAGS | grep -q "$@"; then
+			print -r -- "$pkg"
+		fi
+	done
+}
+function Fcxxflags {
+	while IFS= read -r pkg; do
+		if [[ -f $PD/$pkg/CXXFLAGS ]] && cat $PD/$pkg/CXXFLAGS | grep -q "$@"; then
+			print -r -- "$pkg"
+		fi
+	done
+}
+function Fcc {
+	while IFS= read -r pkg; do
+		if [[ -f $PD/$pkg/CC ]] && cat $PD/$pkg/CC | grep -q "$@"; then
+			print -r -- "$pkg"
+		fi
+	done
+}
+function Fmanual {
+	WF=$WF turbo '
+	if grep -qP "^(=|[<>]=?)?${1%-[0-9]*}(?![A-Za-z0-9_])" "$WF"; then
+		echo "$1"
+	fi
+	'
+}
+function Fdepofmanual { # piss slow # edit: now 4 times less slow
+	typeset expr=0
+	for p in $(L | Fmanual); do
+		expr+="||\$1==\"$p\""
+	done
+	expr=$expr turbo '
+	if equery d ="$1" | awk "$expr{ok=1;exit}END{exit(!ok)}"; then
+		echo "$1"
+	fi
+	'
+}
+
+function Esize {
+	while IFS= read -r pkg; do
+		typeset size=$(<"$PD/$pkg/SIZE")
+		[[ -n $size ]] || size=0
+		print -r -- "$size"$'\t'"$pkg"
+	done | sort -n
+}
+function Edate {
+	while IFS= read -r pkg; do
+		typeset date=$(stat -c %Y -- "$PD/$pkg/SIZE")
+		[[ -n $date ]] || date=0
+		print -r -- "$date"$'\t'"$pkg"
+	done | sort -n
+}
+function E- {
+	awk '{print $2}'
+}
+
+function v { set -x; "$@"; }
+function Xrebuild {
+	typeset env
+	env=()
+	while [[ $1 == ?*=* ]]; do
+		env+=("$1")
+		shift
+	done
+	if (( ${#env[@]} != 0 )); then
+		env=(env "${env[@]}")
+	fi
+	while IFS= read -r pkg; do
+		set -- "$@" ="$pkg"
+	done
+	if [[ -t 0 ]]; then :
+	elif [[ -t 1 ]]; then exec 0<&1
+	elif [[ -t 2 ]]; then exec 0<&2; fi
+	if [[ $KSHUID == 0 ]]; then
+		v "${env[@]}" emerge -a1 "$@"
+	else
+		v doas "${env[@]}" emerge -a1 "$@"
+	fi
+	print -n $'\a'
+}
+
+function Nsmallest {
+	Esize | head -n"$1" | E-
+}
+
+# pkgquery> L | Edate
+
+# pkgquery> L | Fc++ | Folder-than make.conf | Nsmallest 15 | Xrebuild
+
+# pkgquery> L | Fc++ | Fnot Fcxxflags GLIBCXX | Nsmallest 15 | Xrebuild
+
+# syntax idea:
+# Fsize gt ${|Psize gfdgdfg-jhgjf/fafafsaf}
+
+# want:
+# Flinked-to-by-manual-package
+
+# ^ Lmanual | Tlinked-deps
+
+# ------------------------------------------------------------------------------
+
+if (( $# == 0 )); then
+	pushtitle 'pom - {}'
+	trap 'poptitle' EXIT
+	trap 'exit 1' HUP TERM
+
+	PS1=$'\apom> '
+	HISTFILE=~/.cache/pom_history
+
+	print -ru2 "Welcome to pom."
+	print -ru2 "Type 'help' to see available commands."
+else
+	cmd=
+	for arg; do cmd+=\ ${arg//\'/\'\\\'\'}; done
+	exec eval "$cmd"
+fi

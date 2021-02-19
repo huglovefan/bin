@@ -1,0 +1,37 @@
+#!/bin/sh
+#
+# open a pdf in mpv
+#
+
+file=$(realpath -- "$1") || exit
+name=${file##*/} name=${name%.*}
+t= p= tmpdir=
+clean() {
+	cd /
+	if [ -n "$t" ]; then poptitle; t=; fi
+	if [ -n "$p" ]; then kill "$p"; p=; fi
+	if [ -n "$tmpdir" ]; then rm -r "$tmpdir"; tmpdir=; fi
+}
+trap 'clean' EXIT
+trap 'exit 1' HUP INT TERM
+pushtitle "mpdf $name - {}" && t=1
+tmpdir=$(mktemp -d) || exit
+p=
+cd "$tmpdir" || exit
+echo "converting..."
+(
+bye=; trap 'bye=1' TERM
+cntsz=
+while sleep 1 && [ -z "$bye" ]; do
+	cnt=$(ls "$tmpdir" | wc -l)
+	sz=$(du -sh "$tmpdir" | awk '{print$1}')
+	[ "$cnt$sz" != "$cntsz" ] || continue
+	echo "progress: $cnt page(s) ($sz) ..."
+	cntsz=$cnt$sz
+done
+) &
+p=$!
+pdftoppm -jpeg -jpegopt quality=100 "$file" "$name" || exit
+kill "$p"; p=
+mpv "$tmpdir/"
+tpause

@@ -1,0 +1,54 @@
+#!/bin/mksh
+#
+# "connect" to an existing terminal process (input and output, works over ssh)
+#
+
+[[ $KSHUID != 0 ]] || alias doas='command'
+
+if [[ $# != 1 || $1 != pts/+([0-9]) ]]; then
+	print -ru2 "usage: tspy pts/N"
+	return 1
+fi
+
+set -f
+thepid=
+thefd=
+for pid in $(pgrep -t "$1"); do
+	ppid=$(awk '/^PPid:/{print$2;exit}' /proc/$pid/status)
+	if [[ ! /proc/$ppid/exe -ef /usr/bin/xterm ]]; then
+		continue
+	fi
+	for fd in $(ls /proc/$ppid/fd | sort -n); do
+		if [[ $(readlink /proc/$ppid/fd/$fd) == /dev/ptmx ]]; then
+			thefd=$fd
+			break
+		fi
+	done
+	if [[ -n $thefd ]]; then
+		thepid=$ppid
+		break
+	fi
+done
+
+if [[ -z $thepid || -z $thefd ]]; then
+	print -ru2 "tspy: xterm@$1 not found"
+	return 1
+fi
+
+# quiet=attach requires a recent strace (5.3 too old, 5.7 works)
+
+{
+doas strace -e quiet=attach -xx -p "$thepid" -e read -s1073741823 -o /proc/self/fd/1 | \
+	grep --line-buffered -Po "^read\(${thefd}, \"\\K[^\"]+" | \
+	while IFS= read -r s; do
+		eval "print -nr -- \$'$s'"
+	done
+} &
+p=$!
+t=$(stty -g)
+trap 'stty "$t"; if [[ -e /proc/$p ]]; then pkill "$p"; fi' EXIT
+trap 'exit 1' HUP INT TERM
+stty -echo
+while IFS= read -rn1 c; do
+	doas ttype -n "$c"
+done >>"/dev/$1"

@@ -1,0 +1,61 @@
+#!/bin/sh
+#
+# replaces gifs downloaded from imgur with mp4 versions
+#
+# imgur does a funny trick where they show .mp4 converted versions of gifs when they're opened in a browser
+# they don't like to admit it: the url still ends in .gif
+# however, for compatibility reasons they do actually serve you a gif version if you do "save link as" to download a link directly
+# if you alt-click links in a gif thread you might end up with some cat gifs that take up 45MB in your downloads folder
+#
+# % ls -S Downloads/*.gif
+# -rw-r--r-- 1 human human   45M Dec 25 18:33 Downloads/ihZcgXV.gif
+# -rw-r--r-- 1 human human   23M Dec 17 20:04 Downloads/1e4OiJi.gif
+# -rw-r--r-- 1 human human   15M Feb  8 04:49 Downloads/lxHMiZx.gif
+#
+# bulk conversion:
+#   find ~/Downloads/ -maxdepth 1 -iregex '.*/[a-z0-9]+\.gif$' -exec gif2mp4 {} +
+#
+# ... maybe this should do the same thing for mp4->gif too
+# if there are any where it was converted from gif to a bigger video
+#
+
+savings=0
+replaced=0
+for path; do
+	case $path in
+	/*|./*) ;;
+	*) path=./$path;;
+	esac
+	case $path in
+	*/[A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9].gif) ;;
+	*/[A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9].gif) ;;
+	*) >&2 echo "$1: filename has wrong format, skipping"; continue;;
+	esac
+	basename=${path##*/}
+	base=${basename%.gif}
+	gifsize=$(stat -c '%s' "$path") || continue
+	mp4size=$(curl -s -H 'Accept: video/mp4' --head "https://i.imgur.com/${base}.mp4" | tr -d '\r' | awk '
+	/^[Cc]ontent-[Tt]ype:/ && /video\/mp4/ { ok=1; }
+	/^[Cc]ontent-[Ll]ength:/ && $2 ~ /^[1-9][0-9]*$/ { cl=$2; }
+	END { if (ok && cl != "") { print cl; exit(0); } else { exit(1); } }
+	')
+	if [ -z "$mp4size" ]; then
+		>&2 echo "$path: failed to get details from imgur"
+		continue
+	fi
+	if [ $mp4size -gt $gifsize ]; then
+		>&2 echo "$path: mp4 bigger than gif ($mp4size vs $gifsize)"
+		break
+	fi
+	dirname=${path%/"$basename"}
+	mp4path=$dirname/$base.mp4
+	if curl -H 'Accept: video/mp4' "https://i.imgur.com/${base}.mp4" -o "${mp4path}"; then
+		touch -r "$path" "$mp4path"
+		rm -fv -- "$path"
+		savings=$(( savings+(gifsize-mp4size) ))
+		replaced=$(( replaced+1 ))
+	else
+		rm -f -- "$mp4path"
+	fi
+done
+echo "replaced $replaced files, saved $(humansize $savings) ($savings bytes)"
