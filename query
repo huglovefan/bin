@@ -8,7 +8,7 @@ function n2p {
 	case $1 in
 	+([0-9A-Za-z_-]))
 		set -- "$PD"/*/"$1"-[0-9]*;;
-	+([0-9A-Za-z_-])/+([0-9A-Za-z_-])-[0-9]*([0-9A-Za-z_-]))
+	+([0-9A-Za-z_-])/+([0-9A-Za-z_-])-[0-9]*([0-9A-Za-z._-]))
 		set -- "$PD"/"$1";;
 	+([0-9A-Za-z_-])/+([0-9A-Za-z_-]))
 		set -- "$PD"/"$1"-[0-9]*;;
@@ -22,6 +22,7 @@ function n2p {
 		return $(( ${#REPLY[@]} != 0 ? 0 : 1 ))
 		;;
 	*)
+		>&2 echo "$1: invalid package"
 		return 1;;
 	esac
 	if [[ $# -eq 1 && ! -e $1 ]]; then return 1; fi
@@ -107,6 +108,12 @@ case $1:$(($#-1)) in
 	for arg; do
 		n2p "$arg" || return
 		print -l "${REPLY[@]}"
+	done
+	;;
+@(v|vars):1) shift
+	pkg=${|n2p "$1"}
+	for v in CHOST CC CXX CFLAGS CXXFLAGS LDFLAGS; do
+		awk -v p="$v:" '{print(p, $0)}' "$PD/$pkg/$v"
 	done
 	;;
 *)
