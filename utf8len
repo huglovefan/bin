@@ -1,0 +1,46 @@
+#!/usr/bin/lua5.4
+--
+-- gets the total length of a file encoded as utf-8
+-- (assumes it's plain text and each line ends with \n)
+--
+-- if any line contains invalid utf-8, utf8len will exit with status 1 without
+--  printing the total length.
+-- however, the rest of the input will still be read for further lines
+--  containing invalid utf-8 unless the -q or -s flags are used
+--
+-- -p: forget about the length, just print lines with invalid utf-8 to stdout
+-- -q: quiet operation: don't print any warnings
+-- -s: silent operation: only check if the file is valid utf-8
+--
+
+local do_print = false
+local quiet = false
+for _, arg in ipairs({...}) do
+	if arg:find('p') then do_print = true end
+	if arg:find('q') then quiet = true end
+	if arg:find('s') then silent = true end
+end
+local lineno = 1
+local totallen = 0
+local invalid = false
+for line in io.lines() do
+	local len, badpos = utf8.len(line)
+	if not len then
+		if quiet or silent then os.exit(1) end
+		if do_print then
+			print(line)
+		else
+			io.stderr:write('utf8len: invalid utf-8 at line ' .. lineno .. ' byte ' .. badpos .. '\n')
+		end
+		invalid = true
+		len = 0
+	end
+	totallen = totallen+len
+	lineno = lineno+1
+end
+if invalid then
+	os.exit(1)
+end
+if not (do_print or silent) then
+	print(totallen)
+end

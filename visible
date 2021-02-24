@@ -1,0 +1,120 @@
+#!/usr/bin/lua5.4
+--
+-- escape and highlight unicode characters and invisible ascii ones
+--
+-- output format (default: auto):
+--   -a: auto (bytes for ascii and broken utf-8, unicode for everything else)
+--   -b: bytes (ä -> \xc3\xa4)
+--   -u: unicode (ä -> \u00e4)
+--   -n: nothing (highlight only)
+--
+-- -h: highlight output (default: on if printing to a terminal)
+-- -H: don't highlight output
+--
+-- note: the output isn't really meant to be machine-parseable (any existing
+--  character escapes or backslashes in the input aren't touched by this script)
+--
+
+local startpat = ('^' .. utf8.charpattern)
+local get_invisible_at = function (s, i)
+	local c = s:byte(i)
+	if (c <= 0x1f and not c == 0x09) or c == 0x7f then
+		return s:sub(i, i)
+	end
+	if c >= 0x80 then
+		local st, ed = s:find(startpat, i)
+		if st then
+			return s:sub(st, ed)
+		else
+			return s:sub(i, i)
+		end
+	end
+	return nil
+end
+
+local escape_byte = function (c) return string.format('\\x%02x', c) end
+local escape_unicode4 = function (c) return string.format('\\u%04x', c) end
+local escape_unicode6 = function (c) return string.format('\\U%06x', c) end
+
+local escape_auto = function (c)
+	if c <= 0x7f then
+		return escape_byte(c)
+	elseif c <= 0xffff then
+		return escape_unicode4(c)
+	else
+		return escape_unicode6(c)
+	end
+end
+local escape_unicode = function (c)
+	if c <= 0xffff then
+		return escape_unicode4(c)
+	else
+		return escape_unicode6(c)
+	end
+end
+
+local escape_as_bytes = function (c)
+	local s = {}
+	for i = 1, #c do
+		s[i] = escape_byte(c:byte(i))
+	end
+	return table.concat(s, '')
+end
+local escape_as_unicode = function (c)
+	local s = {}
+	for _, c in utf8.codes(c) do
+		s[#s+1] = escape_unicode(c)
+	end
+	return table.concat(s, '')
+end
+local escape_as_auto = function (c)
+	local s = {}
+	for _, c in utf8.codes(c) do
+		s[#s+1] = escape_auto(c)
+	end
+	return table.concat(s, '')
+end
+local escape_as_nothing = function (c)
+	return c
+end
+
+local display_fn = escape_as_auto
+
+local highlight = nil
+for _, arg in ipairs({...}) do
+	if arg:find('a') then display_fn = escape_as_auto end
+	if arg:find('b') then display_fn = escape_as_bytes end
+	if arg:find('u') then display_fn = escape_as_unicode end
+	if arg:find('n') then display_fn = escape_as_nothing end
+	if arg:find('h') then highlight = true end
+	if arg:find('H') then highlight = false end
+end
+if highlight == nil then
+	highlight = os.execute('[ -t 1 ]')
+end
+if highlight then
+	local dfn = display_fn
+	display_fn = function (c)
+		if utf8.len(c) then
+			return '\27[1m', dfn(c), '\27[0m'
+		else
+			-- invalid utf-8, color it bright red
+			return '\27[1;31m', escape_as_bytes(c), '\27[0m'
+		end
+	end
+end
+
+for line in io.lines() do
+	local i = 1
+	while i <= #line do
+		local c = get_invisible_at(line, i)
+		if c then
+			io.write(display_fn(c))
+			i = i+#c
+		else
+			io.write(line:sub(i, i))
+			i = i+1
+		end
+	end
+	io.write('\n')
+end
