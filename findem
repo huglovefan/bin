@@ -12,7 +12,7 @@ targetdir=$(mktemp -d "/tmp/${0##*/}.XXXXXXXXXX") || exit
 chmod 700 "$targetdir"
 
 echo "$targetdir"
-if [[ -n $DISPLAY && -n $WINDOWID && -t 0 && -t 1 ]]; then
+if [ -n "$DISPLAY" && -n "$WINDOWID" && -t 0 && -t 1 ]; then
 	xdg-open "$targetdir" &
 fi
 
