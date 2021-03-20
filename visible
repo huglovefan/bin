@@ -11,6 +11,8 @@
 -- -h: highlight output (default: on if printing to a terminal)
 -- -H: don't highlight output
 --
+-- -L: output unicode escapes in suitable format for lua (\u1234 -> \u{1234})
+--
 -- note: the output isn't really meant to be machine-parseable (any existing
 --  character escapes or backslashes in the input aren't touched by this script)
 --
@@ -18,7 +20,7 @@
 local startpat = ('^' .. utf8.charpattern)
 local get_invisible_at = function (s, i)
 	local c = s:byte(i)
-	if (c <= 0x1f and not c == 0x09) or c == 0x7f then
+	if (c <= 0x1f and not (c == 0x09)) or c == 0x7f then
 		return s:sub(i, i)
 	end
 	if c >= 0x80 then
@@ -35,6 +37,9 @@ end
 local escape_byte = function (c) return string.format('\\x%02x', c) end
 local escape_unicode4 = function (c) return string.format('\\u%04x', c) end
 local escape_unicode6 = function (c) return string.format('\\U%06x', c) end
+
+local escape_unicode4_lua = function (c) return string.format('\\u{%04x}', c) end
+local escape_unicode6_lua = function (c) return string.format('\\u{%06x}', c) end
 
 local escape_auto = function (c)
 	if c <= 0x7f then
@@ -88,6 +93,10 @@ for _, arg in ipairs({...}) do
 	if arg:find('n') then display_fn = escape_as_nothing end
 	if arg:find('h') then highlight = true end
 	if arg:find('H') then highlight = false end
+	if arg:find('L') then
+		escape_unicode4 = escape_unicode4_lua
+		escape_unicode6 = escape_unicode6_lua
+	end
 end
 if highlight == nil then
 	highlight = os.execute('[ -t 1 ]')
