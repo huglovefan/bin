@@ -4,9 +4,11 @@
 #
 
 check=
-while getopts 'c' o; do
+delete=
+while getopts 'cd' o; do
 	case $o in
 	c) check=1;;
+	d) delete=1;;
 	*) exit 1;;
 	esac
 done
@@ -25,6 +27,14 @@ if [ $# -eq 0 ]; then
 	exit 0
 fi
 
+if [ -n "$delete" ]; then
+	for file; do
+		if ! { corecheck "$file" 2>&1 | awk -v f="$file" '{ print f ": " $0; } END { exit NR>0; }' >&2; }; then
+			rm -iv "$file"
+		fi
+	done
+	exit
+fi
 if [ -n "$check" ]; then
 	for file; do
 		shift
