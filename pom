@@ -417,6 +417,13 @@ function Esize {
 		print -r -- "$size"$'\t'"$pkg"
 	done | sort -n
 }
+function Erepo {
+	while IFS= read -r pkg; do
+		typeset size=$(<"$PD/$pkg/repository")
+		[[ -n $size ]] || size=0
+		print -r -- "$size"$'\t'"$pkg"
+	done | sort -n
+}
 function Edate {
 	while IFS= read -r pkg; do
 		typeset date=$(stat -c %Y -- "$PD/$pkg/SIZE")
