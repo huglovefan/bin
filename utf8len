@@ -20,17 +20,30 @@ for _, arg in ipairs({...}) do
 	if arg:find('q') then quiet = true end
 	if arg:find('s') then silent = true end
 end
+local infilename = nil
+if do_print then
+	local s = io.popen('readlink /proc/self/fd/0'):read('a'):gsub('\n$', '', 1)
+	if s:find('^/.*[^/]$') then
+		infilename = s:match('[^/]+$')
+	else
+		infilename = '<stdin>'
+	end
+end
 local lineno = 1
 local totallen = 0
 local invalid = false
 for line in io.lines() do
 	local len, badpos = utf8.len(line)
 	if not len then
-		if quiet or silent then os.exit(1) end
 		if do_print then
-			print(line)
+			if not quiet then
+				io.write(infilename, ':', lineno, ': ', line, '\n')
+			else
+				io.write(line, '\n')
+			end
 		else
-			io.stderr:write('utf8len: invalid utf-8 at line ' .. lineno .. ' byte ' .. badpos .. '\n')
+			if quiet or silent then os.exit(1) end
+			io.stderr:write('utf8len: invalid utf-8 at line ', lineno, ' byte ', badpos, '\n')
 		end
 		invalid = true
 		len = 0
