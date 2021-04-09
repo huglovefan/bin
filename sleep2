@@ -44,7 +44,7 @@ typeset -u done=$(( sec + ${|parse_time "$1" || REPLY=0} ))
 
 stty=$(stty -g)
 stty -echo
-trap 'stty "$stty"' EXIT
+trap 'rv=$?; stty "$stty"; exit $rv' EXIT
 trap 'exit 1' HUP INT TERM
 
 typeset done_time=$(date -d "@${done}" +'%T')
