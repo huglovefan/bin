@@ -1,18 +1,73 @@
-#!/bin/sh
-#
-# run a command that reads data from stdin, but only if we actually get some data
-#
+#!/usr/bin/tcc -run
+//
+// run a command that reads data from stdin, but only if we actually get some data
+//
 
-if [ $# -eq 0 ]; then
-	>&2 echo "usage: ondata <command>"
-	exit 1
-fi
-b=$(dd bs=1 count=1 2>/dev/null | od -A n -t x1)
-b=${b# }
-[ -n "$b" ] || exit 0
-# is there no POSIX® portable way to print hex escapes?
-{ gawk "END{printf(\"\\x${b}\");}" </dev/null; exec cat; } | exec "$@"
+// printf '' | ondata md5sum  # nothing
+// printf '\0' | ondata md5sum  # 93b885adfe0da089cdf634904fd59f71
+// printf '\0\0' | ondata md5sum  # c4103f122d27677c9db144cae1394a66
+// ondata md5sum </dev/null  # nothing
+// sh -c '' | ondata md5sum  # nothing
 
-# printf '' | ondata md5sum  # nothing
-# printf '\0' | ondata md5sum  # 93b885adfe0da089cdf634904fd59f71
-# printf '\0\0' | ondata md5sum  # c4103f122d27677c9db144cae1394a66
+#include <errno.h>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+
+#include <sys/stat.h>
+#include <sys/types.h>
+
+int main(int argc, char **argv) {
+	if (argc <= 1) {
+		fprintf(stderr, "usage: ondata <command>\n");
+		return 1;
+	}
+
+	// is it a regular file with a non-zero size?
+	struct stat stbuf;
+	if (-1 != fstat(0, &stbuf) &&
+            S_ISREG(stbuf.st_mode) &&
+	    stbuf.st_size > 0) {
+		goto parent_do_exec;
+	}
+
+	char c;
+	switch (read(0, &c, 1)) {
+	case -1: perror("ondata: read"); return 1;
+	case 0: return 0;
+	case 1: break;
+	}
+
+	// can we use seek to un-read the one byte?
+	if ((off_t)-1 != lseek(0, -1, SEEK_CUR)) {
+		goto parent_do_exec;
+	}
+
+	int fds[2];
+	if (-1 == pipe(fds)) {
+		perror("ondata: pipe");
+		return 1;
+	}
+
+	pid_t p = fork();
+	if (p == -1) {
+		perror("ondata: fork");
+		return 1;
+	} else if (p == 0) {
+		dup2(fds[1], 1);
+		close(fds[0]);
+
+		write(1, &c, 1);
+
+		char *v[] = {"cat", NULL};
+		execvp(v[0], v);
+		_exit(1);
+	} else {
+		dup2(fds[0], 0);
+		close(fds[1]);
+parent_do_exec:
+		execvp(argv[1], argv+1);
+		fprintf(stderr, "ondata: %s: %s\n", argv[1], strerror(errno));
+		return 1;
+	}
+}
