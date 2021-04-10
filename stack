@@ -2,6 +2,10 @@
 #
 # prints the stack trace of a core or pid
 #
+# todo:
+# - -g: use gdb instead
+# - -d: attach using debugger
+#
 
 all=
 arg=
