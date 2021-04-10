@@ -1,0 +1,7 @@
+#!/bin/sh
+# > incrond[1578]: table for user human changed, reloading
+# > incrond[1578]: cannot create watch for user human: (16) Device or resource busy
+# seems like you can only have one thing per directory?
+~/.local/bin/cronjobs/picture-conv &
+~/.local/bin/cronjobs/picture-opt &
+wait

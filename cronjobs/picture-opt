@@ -1,0 +1,173 @@
+#!/bin/mksh
+#
+# optimizes pngs in (the current directory)
+#
+# incrontab:
+# /home/human/Pictures	IN_CREATE,IN_MOVED_TO	cd ~/Pictures && REMOTE=hostname exec ~/.local/bin/cronjobs/picture-opt
+# ^ set REMOTE= to a host you can ssh into
+#
+
+if [[ $FLOCKER != "$0" ]]; then
+	{
+	# try again on success
+	# the script returns 0 if there was at least one image to do
+	# so keep going in case there are new ones
+	while FLOCKER="$0" flock -en "$0" "$0" "$@"; do
+		sleep 0.5
+	done
+	exit
+	}
+fi
+
+{
+
+exec >>~/.xsession-errors 2>&1
+
+remote=$REMOTE
+ssh "$remote" 'true' || return
+
+tmpfile=
+function atexit {
+	if [[ -n $tmpfile ]]; then
+		rm -f "$tmpfile"
+		tmpfile=
+	fi
+	ssh "$remote" 'rm -f in.png out.png'
+}
+trap 'atexit' EXIT
+trap 'exit 1' HUP INT TERM
+
+[[ -f .optimized ]] || touch -d@0 .optimized || return
+
+# ------------------------------------------------------------------------------
+
+function ms {
+	typeset t=$EPOCHREALTIME
+	REPLY=${t:0:10}${t:11:3}
+}
+
+function bytesize {
+	REPLY=$(stat -c %s "$1")
+}
+function prettysize {
+	REPLY=$(ls -dhl "$1" | awk '{print $5}')
+	[[ -n $REPLY ]]
+}
+
+function bytes2pretty {
+	# gpl patented algorithm
+	typeset tmp=/tmp/prettysize.$RANDOM
+	truncate -s "$1" "$tmp"
+	prettysize "$tmp"
+	rm -f "$tmp"
+	[[ -n $REPLY ]]
+}
+
+function wait_written {
+	typeset s
+	while true; do
+		s=$(find "$1" -maxdepth 0 -not -newermt '1 second ago' -print -quit) || return
+		if [[ -n $s ]]; then
+			break
+		else
+			sleep 0.2 || return
+		fi
+	done
+	return 0
+}
+
+# ------------------------------------------------------------------------------
+
+# we return 0 if there was at least one file (and no error)
+typeset -i rv=1
+
+find . \
+    -mindepth 1 -maxdepth 1 \
+    -name '*.png' \
+    -type f \
+    -newer .optimized \
+    -printf '%Ts %p\n' | LANG=C sort -n | cut -d' ' -f2- |&
+
+while IFS= read -pr file; do
+
+	wait_written "$file" || return
+
+	print
+	print -r "[$(date +'%Y-%m-%d %H:%M:%S')] ${file##*/}"
+
+	size=${|bytesize "$file"} || return
+	if (( size <= 20000 )); then
+		print -r " guessed type: tiny snippet"
+		flags='-zc 9 -zm 8 -zs 0,1 -f 0'
+	elif (( size <= 250000 )); then
+		print -r " guessed type: normal cropped screenshot"
+		flags='-zc 9 -zm 8 -zs 0,1 -f 0,5'
+	elif (( size <= 450000 )); then
+		print -r " guessed type: full desktop screenshot"
+		flags='-zc 9 -zm 8 -zs 0,1 -f 0,5'
+	elif (( size <= 1000000 )); then
+		print -r " guessed type: ~480p mpv shot"
+		flags='-zc 1,9 -zm 8 -zs 1,2 -f 5'
+	elif (( size <= 2400000 )); then
+		print -r " guessed type: ~720p mpv shot"
+		flags='-zc 1,9 -zm 8 -zs 1,2 -f 5'
+	elif (( size <= 5400000 )); then
+		print -r " guessed type: ~1080p mpv shot"
+		# saved: 9.2M 20m01.06s real  -o 2
+		# saved: 9.2M 18m13.98s real  -zc 9 -zm 8 -zs 0,1 -f 0,5 -zw 32k
+		# saved: 9.2M 18m06.58s real  -zc 9 -zm 8 -zs 0,1 -f 0,5
+		# saved: 8.5M 15m53.32s real  -zc 9 -zm 8 -zs 0,1 -f 5   -zw 32k
+		# saved: 8.6M 11m51.15s real  -zc 9 -zm 8 -zs 1   -f 0,5 -zw 32k <-- this
+		# saved: 8.1M 10m40.69s real  -zc 9 -zm 8 -zs 1   -f 5   -zw 32k
+		# saved: 8.1M 10m39.89s real  -zc 9 -zm 8 -zs 1   -f 5
+		# saved: 6.2M  5m53.93s real  -zc 9 -zm 8 -zs 1   -f 5   -zw 16k
+		# saved: 4.3M  3m00.28s real  -zc 9 -zm 8 -zs 1   -f 5   -zw 8k
+		# saved: 3.0M  1m48.60s real  -zc 9 -zm 8 -zs 1   -f 5   -zw 4k
+		flags='-zc 9 -zm 8 -zs 1 -f 0,5 -zw 32k'
+	else
+		print -r " guessed type: ???"
+		# just one image to test with so far
+		# saved: 885K 1m21.73s real -o2
+		# saved: 885K 0m38.61s real -zc 9 -zm 8 -zs 0 -f 0 -zw 32k <-- doctors hate him
+		# saved: 40K  0m26.99s real -o1
+		flags='-zc 9 -zm 8 -zs 0 -f 0 -zw 32k'
+		# saved: 923K 0m59.11s real zopflipng --iterations=1 -q --filters=0
+		# saved: 575K 0m39.81s real zopflipng --iterations=1 -q --filters=e
+		# saved: 199K 0m21.27s real zopflipng --iterations=1 -q --filters=m
+		# saved: 206K 0m20.76s real zopflipng --iterations=1 -q --filters=4
+		# saved: 225K 0m16.99s real zopflipng --iterations=1 -q --filters=1
+		# saved:  68K 0m22.40s real zopflipng --iterations=1 -q --filters=2
+		# saved:  38K 0m22.62s real zopflipng --iterations=1 -q --filters=3
+	fi
+	print -r "   input size: ${|bytes2pretty "$size"} (${size})"
+	scp -pq "$file" "$remote":in.png || return
+	startms=${|ms}
+	if ssh "$remote" "rm -f out.png && optipng -out out.png -preserve -quiet $flags in.png"; then
+		endms=${|ms}
+		tmpfile=${file}.opt
+		scp -pq "$remote":out.png "${file}.opt" || return
+		newsize=${|bytesize "${file}.opt"}
+		print -r "  output size: ${|bytes2pretty "$newsize"} (${newsize})"
+		print -r "         time: $((endms-startms))ms"
+		print -r "        saved: ${|bytes2pretty "$((size-newsize))"}"
+		if [[ -f $file ]]; then
+			mv -f "${file}.opt" "$file" || return
+			tmpfile=
+		fi
+	fi
+	if [[ -n $tmpfile ]]; then
+		rm -f "$tmpfile" || return
+		tmpfile=
+	fi
+	ssh "$remote" 'rm -f in.png out.png'
+
+	touch -r "$file" .optimized || return
+
+	rv=0
+
+done
+
+wait
+return $rv
+
+}

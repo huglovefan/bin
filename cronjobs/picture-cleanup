@@ -1,0 +1,25 @@
+#!/bin/sh
+#
+# performs cleanup duties in ~/Pictures/
+#
+# crontab:
+# 0 * * * * exec ~/.local/bin/cronjobs/picture-cleanup                                   
+#
+
+cd ~/Pictures || exit
+
+# move old images to old/
+mkdir -p old || exit
+find . \
+    -mindepth 1 -maxdepth 1 \
+    -name '*.png' \
+    -not -newermt '1 month ago' \
+    -exec mv -iv -t old/ -- {} +
+
+# delete old jpg conversions
+mkdir -p jpg || exit
+find jpg/ \
+    -mindepth 1 -maxdepth 1 \
+    -name '*.jpg' \
+    -not -newermt '2 weeks ago' \
+    -exec rm -v -- {} +

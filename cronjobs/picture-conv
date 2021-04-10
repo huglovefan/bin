@@ -1,0 +1,94 @@
+#!/bin/mksh
+#
+# converts pngs in (the current directory) to jpg
+#
+# incrontab:
+# /home/human/Pictures	IN_CREATE,IN_MOVED_TO	cd ~/Pictures && exec ~/.local/bin/cronjobs/picture-conv
+#
+
+if [[ $FLOCKER != "$0" ]]; then
+	{
+	# try again on success
+	# the script returns 0 if there was at least one image to do
+	# so keep going in case there are new ones
+	while FLOCKER="$0" flock -en "$0" "$0" "$@"; do
+		sleep 0.5
+	done
+	exit
+	}
+fi
+
+{
+
+exec >>~/.xsession-errors 2>&1
+
+mkdir -p jpg || return
+[[ -f jpg/.stamp ]] || touch -d@0 jpg/.stamp || return
+
+# ------------------------------------------------------------------------------
+
+function wait_written {
+	typeset s
+	while true; do
+		s=$(find "$1" -maxdepth 0 -not -newermt '1 second ago' -print -quit) || return
+		if [[ -n $s ]]; then
+			break
+		else
+			sleep 0.2 || return
+		fi
+	done
+	return 0
+}
+
+# ------------------------------------------------------------------------------
+
+find . \
+    -mindepth 1 -maxdepth 1 \
+    -name '*.png' \
+    -not -name 'Screenshot_*' \
+    -not -name '*_snapshot_*_snapshot_*' \
+    -type f \
+    -newermt '2 weeks ago' \
+    -printf '%Ts %p\n' | LANG=C sort -n | cut -d' ' -f2- |&
+
+typeset -i did_something=0
+
+while IFS= read -pr file; do
+
+	outfile=jpg/${file%.*}.jpg
+	if [[ -e $outfile ]]; then
+		continue
+	fi
+
+	wait_written "$file" || return
+
+	convert "$file" \
+	    -define jpeg:dct-method=float \
+	    -quality 95 \
+	    -sampling-factor 4:2:0 \
+	    -strip \
+	    "$outfile"
+	if (( $? != 0 )); then
+		return 1
+	fi
+
+	if [[ -f $outfile ]] && \
+	   touch -r "$file" "$outfile" && \
+	   touch -r "$file" jpg/.stamp \
+	; then
+		# ok
+		did_something=1
+	else
+		rm -f "$outfile"
+		return 1
+	fi
+
+done
+
+if (( ! did_something )); then
+	return 1
+fi
+
+return 0
+
+}
