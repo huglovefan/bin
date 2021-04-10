@@ -51,6 +51,7 @@ for line in io.lines() do
 	totallen = totallen+len
 	lineno = lineno+1
 end
+totallen = totallen+(lineno-1)
 if invalid then
 	os.exit(1)
 end
