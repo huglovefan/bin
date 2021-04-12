@@ -135,7 +135,7 @@ delete_savedata() {
 
 highlight_output() {
 	if [ -t 1 ]; then
-		sed -E "$sed" | tsnip
+		sed "$sed" | tsnip
 	else
 		cat
 	fi
