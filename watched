@@ -9,11 +9,11 @@
 #
 
 aflag=0
-while getopts 'adel' o; do
+while getopts 'adelw' o; do
 	case $o in
-	a)     aflag=$((aflag+1));;
-	[del]) eval ${o}flag=1;;
-	*)     exit 1;;
+	a)      aflag=$((aflag+1));;
+	[delw]) eval ${o}flag=1;;
+	*)      exit 1;;
 	esac
 done
 shift $((OPTIND-1))
@@ -87,6 +87,7 @@ list_savedata() {
 }
 
 read_savedata() {
+	wfile=
 	while read -r date time hash; do
 		IFS= read -r line <"$hash"
 		case $line in
@@ -99,11 +100,18 @@ read_savedata() {
 		if [ -n "$eflag" ] && ! [ -e "$path" ]; then
 			continue
 		fi
-		if [ -z "$lflag" ]; then
-			path=${path##*/}
+		if [ -z "$wflag" ]; then
+			if [ -z "$lflag" ]; then
+				path=${path##*/}
+			fi
+			printf '%s %s %s\n' "$date" "${time%%.*}" "$path"
+		else
+			wfile=$path
 		fi
-		printf '%s %s %s\n' "$date" "${time%%.*}" "$path"
 	done
+	if [ -n "$wflag" ]; then
+		printf '%s\n' "$wfile"
+	fi
 }
 
 delete_savedata() {
@@ -135,13 +143,31 @@ highlight_output() {
 
 if [ -n "$has_filter" ]; then
 	if [ -n "$dflag" ]; then
+		if [ -n "$wflag" ]; then
+			>&2 echo "watched: -d and -w can't be used together"
+			exit 1
+		fi
 		list_savedata | delete_savedata
 	else
-		list_savedata | read_savedata | highlight_output
+		if [ -n "$wflag" ]; then
+			f=$(list_savedata | read_savedata)
+			if [ -n "$f" ]; then
+				exec mpv -- "$f"
+			else
+				>&2 echo "watched: no file matching the query was found"
+				exit 1
+			fi
+		else
+			list_savedata | read_savedata | highlight_output
+		fi
 	fi
 else
 	if [ -n "$dflag" ]; then
 		>&2 echo "watched: -d can only be used when a filter is specified"
+		exit 1
+	fi
+	if [ -n "$wflag" ]; then
+		>&2 echo "watched: -w can only be used when a filter is specified"
 		exit 1
 	fi
 	list_savedata | sort | read_savedata | highlight_output
