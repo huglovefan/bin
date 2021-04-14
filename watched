@@ -40,7 +40,7 @@ if [ $# -gt 0 ]; then
 			sed="$sed$word"
 			if [ $# -gt 0 ]; then
 				code="$code*"
-				sed="$sed\\|"
+				sed="$sed|"
 			fi
 		done
 		code="$code*) return 0;; *) return 1;; esac; }"
@@ -135,7 +135,7 @@ delete_savedata() {
 
 highlight_output() {
 	if [ -t 1 ]; then
-		sed "$sed" | tsnip
+		sed -E "$sed" | tsnip
 	else
 		cat
 	fi
