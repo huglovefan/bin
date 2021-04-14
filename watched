@@ -141,6 +141,15 @@ highlight_output() {
 	fi
 }
 
+watch_or_die() {
+	if [ -n "$1" ]; then
+		exec mpv -- "$1"
+	else
+		>&2 echo "watched: no files to watch!"
+		exit 1
+	fi
+}
+
 if [ -n "$has_filter" ]; then
 	if [ -n "$dflag" ]; then
 		if [ -n "$wflag" ]; then
@@ -150,13 +159,7 @@ if [ -n "$has_filter" ]; then
 		list_savedata | delete_savedata
 	else
 		if [ -n "$wflag" ]; then
-			f=$(list_savedata | read_savedata)
-			if [ -n "$f" ]; then
-				exec mpv -- "$f"
-			else
-				>&2 echo "watched: no file matching the query was found"
-				exit 1
-			fi
+			watch_or_die "$(list_savedata | read_savedata)"
 		else
 			list_savedata | read_savedata | highlight_output
 		fi
@@ -167,8 +170,8 @@ else
 		exit 1
 	fi
 	if [ -n "$wflag" ]; then
-		>&2 echo "watched: -w can only be used when a filter is specified"
-		exit 1
+		watch_or_die "$(list_savedata | sort | read_savedata)"
+	else
+		list_savedata | sort | read_savedata | highlight_output
 	fi
-	list_savedata | sort | read_savedata | highlight_output
 fi
