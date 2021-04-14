@@ -41,32 +41,38 @@ if [ $# -gt 0 ]; then
 			sed="$sed$word"
 			if [ $# -gt 0 ]; then
 				code="$code*"
-				sed="$sed|"
+				sed="$sed\|"
 			fi
 		done
 		code="$code*) return 0;; *) return 1;; esac; }"
 		sed="$sed,\\x1b[1m\\0\\x1b[0m,g"
 		eval "$code"
 	fi
+	output_highlight_fn() {
+		sed "$sed"
+	}
 else
-	# no keywords to highlight
-	# try some dumb stuff like
-	# - highlighting the first character of the show name (first char outside any brackets)
-	# - highlighting the episode number
-	# - dimming parts inside brackets
-	sed='
-	#s/(^|] )([A-Za-z])/\1\x1b[1m\2\x1b[0m/
-	#s/( )([0-9]+)( )/\1\x1b[1m\2\x1b[0m\3/
-	s/\[[^\x5d]*?\]/\x1b[2m\0\x1b[0m/g
-	s/\([^)]*?\)/\x1b[2m\0\x1b[0m/g
-	s/ (-) / \x1b[2m\1\x1b[0m /g
-	s/-[0-9A-Za-z]{11}\.(mkv|mp4)$/\x1b[2m\0\x1b[0m/
-	s/\.[0-9.a-z]+/\x1b[2m\0\x1b[0m/
-	'
-	# maybe but dont: sed -E 's/\W+/\x1b[2m\0\x1b[0m/g'
-	# it would be nice if this used the multiple replacements thing i wrote
-	# or if sed could use perl regexps with lookarounds
-	# ^ can't perl do sed's job though?
+	# no keywords to highlight -> just dim unimportant stuff
+	pat='s/((?!)'
+	# [brackets]
+	pat="$pat|"'\[[^\]]*\]'
+	# (parens)
+	pat="$pat|"'\([^)]*\)'
+	# optional youtube-dl video id (twitter or youtube)
+	# file extension
+	# optional ".torrent"
+	pat="$pat|"'(?:-(?:[A-Za-z0-9]{11}|[0-9]{19}))?\.[A-Za-z0-9_]+(?:\.torrent)?$'
+	# ".torrent" at the end of a directory name
+	pat="$pat|"'\.torrent(?=\/)'
+	# some non-word characters
+	# (the lookbehind prevents this from matching the date/time part of the output)
+	pat="$pat|"'(?<=........)[-_.~]+'
+	# "v2" in episode number
+	pat="$pat|"'(?<=\b[0-9]{2,3})v[0-9]\b'
+	pat="$pat)/\x1b[2m\1\x1b[0m/g"
+	output_highlight_fn() {
+		perl -pe "no warnings 'experimental'; $pat"
+	}
 fi
 
 cd ~/.config/mpv/watch_later || exit
@@ -136,7 +142,7 @@ delete_savedata() {
 
 highlight_output() {
 	if [ -t 1 ]; then
-		sed -E "$sed" | tsnip
+		output_highlight_fn | tsnip
 	else
 		cat
 	fi
