@@ -1,10 +1,11 @@
 #!/bin/sh
 #
-# watched [-a] [-d] [-e] [-l] [words]
+# watched [-a] [-d] [-e] [-l] [-w] [words]
 #   -a: show ancient entries (default: 2wk, -a: 1mo, -aa: 3mo, -aaa: all)
 #   -d: delete entries instead of printing (must specify a filter)
 #   -e: existing files only
 #   -l: long output (full paths)
+#   -w: watch file (open in mpv)
 #   words: show only files containing words
 #
 
